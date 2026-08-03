@@ -15,6 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- GOOGLE ANALYTICS INTEGRATION ---
 def inject_google_analytics(measurement_id):
     ga_code = f"""
     <script async src="https://www.googletagmanager.com/gtag/js?id={measurement_id}"></script>
@@ -57,7 +58,7 @@ analysis_type = st.sidebar.radio(
 
 res_mode = st.sidebar.selectbox("Mesh Resolution", options=["lr (0.02μm)", "mr (0.01μm)", "hr (0.005μm)"], index=0)
 
-# --- HELPER FUNCTION FOR FIELD DISPLAY ---
+# --- HELPER FUNCTION FOR 3 SAMPLE FIELDS DISPLAY ---
 def render_sample_3_fields(sample_points_dict):
     col_a, col_b, col_c = st.columns(3)
     cols = [col_a, col_b, col_c]
@@ -68,8 +69,10 @@ def render_sample_3_fields(sample_points_dict):
             s_data = sample_points_dict[tag]
             with cols[idx]:
                 st.markdown(f"#### 📍 {tag} Sample Point")
-                if 'val' in s_data: st.caption(f"Parameter Value: **{s_data['val']:.3f}**")
-                elif 'p1' in s_data: st.caption(f"({s_data['p1']:.2f}, {s_data['p2']:.2f})")
+                if 'val' in s_data: 
+                    st.caption(f"Parameter Value: **{s_data['val']:.3f}**")
+                elif 'p1' in s_data: 
+                    st.caption(f"X: **{s_data['p1']:.3f}**, Y: **{s_data['p2']:.3f}**")
                 
                 sp_r = s_data['res']
                 
@@ -93,7 +96,9 @@ def render_sample_3_fields(sample_points_dict):
                     ax.set_title(f"TM0 Field (n_eff={m0['neff']:.4f})")
                     st.pyplot(fig)
 
+# ==============================================================================
 # --- MODE 1: SINGLE POINT ANALYSIS ---
+# ==============================================================================
 if analysis_type == "Single Point Analysis":
     st.sidebar.header("🛠️ Geometry & Wavelength")
     w_core = st.sidebar.number_input("Waveguide Width [μm]", value=1.5, step=0.1)
@@ -168,13 +173,14 @@ if analysis_type == "Single Point Analysis":
                         st.pyplot(fig_m)
                 tab_idx += 1
 
+# ==============================================================================
 # --- MODE 2: 1D PARAMETRIC SWEEP ---
+# ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
     param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Oxide Top Thickness"]
     axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=0)
 
-    # Clean Min / Max / Points Inputs
     def_min = 1.50 if axis_1d == "Wavelength" else (0.6 if axis_1d == "Waveguide Width" else 0.2)
     def_max = 1.60 if axis_1d == "Wavelength" else (1.8 if axis_1d == "Waveguide Width" else 0.6)
     def_pts = 11
@@ -291,7 +297,9 @@ elif analysis_type == "1D Parametric Sweep":
             ax_a.grid(True); ax_a.legend(); ax_a.set_xlabel(s1['param_name']); ax_a.set_ylabel('Effective Area A_eff [μm²]')
             st.pyplot(fig_a)
 
+# ==============================================================================
 # --- MODE 3: 2D UNIVERSAL PARAMETRIC SWEEP ---
+# ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
     param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Oxide Top Thickness"]
@@ -380,3 +388,54 @@ else:
 
         with tab2d_3:
             render_sample_3_fields(sr['sample_points'])
+
+# ==============================================================================
+# --- PREVIEW / CAROUSEL DISPLAY (INITIAL LOAD) ---
+# ==============================================================================
+if 'sp_results' not in st.session_state and 'sweep_1d_results' not in st.session_state and 'sweep_2d_results' not in st.session_state:
+    st.info("👈 Select core material and physical geometry in the sidebar, then click **Calculate** 🚀")
+    
+    st.markdown("### 🔬 Reference Modal Profiles & Numerical Benchmarks 🎨")
+    st.markdown("Below are standard reference solutions calculated for a single channel optical waveguide:")
+
+    preview_items = [
+        {"file": "index_profile.png", "title": "1. Waveguide Refractive Index Distribution n(x,y) 📐"},
+        {"file": "even_mode.png", "title": "2. Fundamental Quasi-TE Mode Field Profile ⚡"},
+        {"file": "1d_profiles.png", "title": "3. 1D Transverse Field Profile at Core Center 📊"},
+        {"file": "dispersion.png", "title": "4. Waveguide Dispersion Characteristics n_eff(λ) 📈"}
+    ]
+    
+    valid_items = [item for item in preview_items if os.path.exists(item["file"])]
+    if valid_items:
+        encoded_slides = []
+        for idx, item in enumerate(valid_items):
+            with open(item["file"], "rb") as img_f:
+                b64 = base64.b64encode(img_f.read()).decode()
+            encoded_slides.append(f"""
+                <div class="mySlides fade" style="display: {'block' if idx==0 else 'none'}; text-align: center;">
+                    <div style="font-weight: 600; font-size: 15px; margin-bottom: 10px; color: #0F172A; font-family: sans-serif;">
+                        {item['title']}
+                    </div>
+                    <img src="data:image/png;base64,{b64}" style="max-width: 80%; height: auto; border-radius: 8px; border: 1px solid #CBD5E1; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                </div>
+            """)
+
+        carousel_html = f"""
+        <div id="slideshow-container" style="max-width: 750px; position: relative; margin: 10px auto; padding: 18px; background: #F8FAFC; border-radius: 12px; border: 1px solid #E2E8F0;">
+            {''.join(encoded_slides)}
+        </div>
+        <script>
+            let slideIndex = 0;
+            showSlides();
+            function showSlides() {{
+                let i;
+                let slides = document.getElementsByClassName("mySlides");
+                for (i = 0; i < slides.length; i++) {{ slides[i].style.display = "none"; }}
+                slideIndex++;
+                if (slideIndex > slides.length) {{slideIndex = 1}}    
+                if (slides[slideIndex-1]) {{ slides[slideIndex-1].style.display = "block"; }}
+                setTimeout(showSlides, 3000);
+            }}
+        </script>
+        """
+        st.components.v1.html(carousel_html, height=480)
