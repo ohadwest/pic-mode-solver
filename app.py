@@ -34,7 +34,7 @@ def inject_google_analytics(measurement_id):
 inject_google_analytics("G-7776KX662W")
 
 st.title("⚡ Universal Waveguide Core & Air Confinement Solver")
-st.markdown("### Integrated Optics Multi-Mode Solver with Range Controls & Sample Field Displays")
+st.markdown("### Integrated Optics Multi-Mode Solver with Range Controls & Equations Dashboard")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
@@ -76,7 +76,6 @@ def render_sample_3_fields(sample_points_dict):
                 
                 sp_r = s_data['res']
                 
-                # Show TE0 if available
                 if len(sp_r['te_modes']) > 0:
                     m0 = sp_r['te_modes'][0]
                     fig, ax = plt.subplots(figsize=(5, 3.5))
@@ -86,7 +85,6 @@ def render_sample_3_fields(sample_points_dict):
                     ax.set_title(f"TE0 Field (n_eff={m0['neff']:.4f})")
                     st.pyplot(fig)
                 
-                # Show TM0 if available
                 if len(sp_r['tm_modes']) > 0:
                     m0 = sp_r['tm_modes'][0]
                     fig, ax = plt.subplots(figsize=(5, 3.5))
@@ -107,12 +105,15 @@ if analysis_type == "Single Point Analysis":
     top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=0.1, step=0.05)
     bottom_ox = st.sidebar.number_input("Oxide Bottom Thickness (BOX) [μm]", value=4.0, step=0.5)
 
+    st.sidebar.header("🔍 Advanced Search")
+    search_higher_modes = st.sidebar.checkbox("Search for Higher-Order Modes", value=False, help="Enable to scan up to 8 bound modes. Off by default for fast single-mode execution.")
+
     run_sp_btn = st.sidebar.button("🚀 Calculate Single Point", type="primary", use_container_width=True)
 
     if run_sp_btn or 'sp_results' in st.session_state:
         if run_sp_btn:
-            with st.spinner("Searching and solving for all bound modes..."):
-                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice)
+            with st.spinner("Solving optical wave equations..."):
+                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes)
                 st.session_state['sp_results'] = res
 
         r = st.session_state['sp_results']
@@ -131,50 +132,108 @@ if analysis_type == "Single Point Analysis":
         if len(r['tm_modes']) > 0:
             for m in r['tm_modes']: tab_list.append(f"TM{m['mode_num']} Mode")
             
-        if len(tab_list) > 0:
-            tabs = st.tabs(tab_list)
-            tab_idx = 0
+        tab_list.append("📊 1D Profiles (X & Y Cutlines)")
+        tab_list.append("📖 Equations & Definitions")
+        
+        tabs = st.tabs(tab_list)
+        tab_idx = 0
+        
+        # Render TE Modes
+        for m in r['te_modes']:
+            with tabs[tab_idx]:
+                st.subheader(f"Quasi-TE Mode TE_{m['mode_num']} (n_eff = {m['neff']:.5f})")
+                col_info, col_img = st.columns([1, 2])
+                with col_info:
+                    st.markdown(f"""
+                    * **Effective Index ($n_{{\\text{{eff}}}}$):** `{m['neff']:.5f}`
+                    * **Core Confinement ($\Gamma_{{\\text{{Core}}}}$):** `{m['gamma_core']:.2f}%`
+                    * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** `{m['gamma_air']:.2f}%`
+                    * **Effective Area ($A_{{\\text{{eff}}}}$):** `{m['a_eff']:.3f} μm²`
+                    * **Mode Field Diameter (MFD):** `{m['mfd']:.3f} μm`
+                    * **Horizontal FWHM (X):** `{m['fwhm_x']:.3f} μm`
+                    * **Vertical FWHM (Y):** `{m['fwhm_y']:.3f} μm`
+                    """)
+                with col_img:
+                    fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
+                    im_m = ax_m.imshow(m['field'].T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='jet', aspect='auto')
+                    ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
+                    fig_m.colorbar(im_m, ax=ax_m, label='Field (Ex)')
+                    st.pyplot(fig_m)
+            tab_idx += 1
             
-            for m in r['te_modes']:
-                with tabs[tab_idx]:
-                    st.subheader(f"Quasi-TE Mode TE_{m['mode_num']} (n_eff = {m['neff']:.5f})")
-                    col_info, col_img = st.columns([1, 2])
-                    with col_info:
-                        st.markdown(f"""
-                        * **Effective Index ($n_{{\\text{{eff}}}}$):** {m['neff']:.5f}
-                        * **Core Confinement ($\Gamma_{{\\text{{Core}}}}$):** {m['gamma_core']:.2f}%
-                        * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** {m['gamma_air']:.2f}%
-                        * **Effective Area ($A_{{\\text{{eff}}}}$):** {m['a_eff']:.2f} μm²
-                        """)
-                    with col_img:
-                        fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
-                        im_m = ax_m.imshow(m['field'].T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='jet', aspect='auto')
-                        ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
-                        fig_m.colorbar(im_m, ax=ax_m, label='Field (Ex)')
-                        st.pyplot(fig_m)
-                tab_idx += 1
-                
-            for m in r['tm_modes']:
-                with tabs[tab_idx]:
-                    st.subheader(f"Quasi-TM Mode TM_{m['mode_num']} (n_eff = {m['neff']:.5f})")
-                    col_info, col_img = st.columns([1, 2])
-                    with col_info:
-                        st.markdown(f"""
-                        * **Effective Index ($n_{{\\text{{eff}}}}$):** {m['neff']:.5f}
-                        * **Core Confinement ($\Gamma_{{\\text{{Core}}}}$):** {m['gamma_core']:.2f}%
-                        * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** {m['gamma_air']:.2f}%
-                        * **Effective Area ($A_{{\\text{{eff}}}}$):** {m['a_eff']:.2f} μm²
-                        """)
-                    with col_img:
-                        fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
-                        im_m = ax_m.imshow(m['field'].T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='jet', aspect='auto')
-                        ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
-                        fig_m.colorbar(im_m, ax=ax_m, label='Field (Ey)')
-                        st.pyplot(fig_m)
-                tab_idx += 1
+        # Render TM Modes
+        for m in r['tm_modes']:
+            with tabs[tab_idx]:
+                st.subheader(f"Quasi-TM Mode TM_{m['mode_num']} (n_eff = {m['neff']:.5f})")
+                col_info, col_img = st.columns([1, 2])
+                with col_info:
+                    st.markdown(f"""
+                    * **Effective Index ($n_{{\\text{{eff}}}}$):** `{m['neff']:.5f}`
+                    * **Core Confinement ($\Gamma_{{\\text{{Core}}}}$):** `{m['gamma_core']:.2f}%`
+                    * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** `{m['gamma_air']:.2f}%`
+                    * **Effective Area ($A_{{\\text{{eff}}}}$):** `{m['a_eff']:.3f} μm²`
+                    * **Mode Field Diameter (MFD):** `{m['mfd']:.3f} μm`
+                    * **Horizontal FWHM (X):** `{m['fwhm_x']:.3f} μm`
+                    * **Vertical FWHM (Y):** `{m['fwhm_y']:.3f} μm`
+                    """)
+                with col_img:
+                    fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
+                    im_m = ax_m.imshow(m['field'].T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='jet', aspect='auto')
+                    ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
+                    fig_m.colorbar(im_m, ax=ax_m, label='Field (Ey)')
+                    st.pyplot(fig_m)
+            tab_idx += 1
+
+        # 1D Cutlines Tab (X & Y)
+        with tabs[tab_idx]:
+            st.subheader("📊 1D Transverse Field Profiles (Cutlines along X & Y)")
+            col_cx, col_cy = st.columns(2)
+            
+            with col_cx:
+                fig_cx, ax_cx = plt.subplots(figsize=(6, 4))
+                if len(r['te_modes']) > 0: ax_cx.plot(r['xc'], r['te_modes'][0]['cut_x'], 'b-', lw=2, label='TE0 (Horizontal)')
+                if len(r['tm_modes']) > 0: ax_cx.plot(r['xc'], r['tm_modes'][0]['cut_x'], 'r--', lw=2, label='TM0 (Horizontal)')
+                ax_cx.grid(True); ax_cx.legend()
+                ax_cx.set_xlabel('Horizontal Position X [μm]')
+                ax_cx.set_ylabel('Normalized Field Intensity')
+                ax_cx.set_title("Horizontal Cutline (y = y_center)")
+                st.pyplot(fig_cx)
+
+            with col_cy:
+                fig_cy, ax_cy = plt.subplots(figsize=(6, 4))
+                if len(r['te_modes']) > 0: ax_cy.plot(r['yc'], r['te_modes'][0]['cut_y'], 'b-', lw=2, label='TE0 (Vertical)')
+                if len(r['tm_modes']) > 0: ax_cy.plot(r['yc'], r['tm_modes'][0]['cut_y'], 'r--', lw=2, label='TM0 (Vertical)')
+                ax_cy.grid(True); ax_cy.legend()
+                ax_cy.set_xlabel('Vertical Position Y [μm]')
+                ax_cy.set_ylabel('Normalized Field Intensity')
+                ax_cy.set_title("Vertical Cutline (x = 0)")
+                st.pyplot(fig_cy)
+        tab_idx += 1
+
+        # Equations & Definitions Tab
+        with tabs[tab_idx]:
+            st.markdown("""
+            ### 📖 Mathematical Equations & Physical Definitions
+
+            #### 1. Effective Index ($n_{\\text{eff}}$) & Guidance Condition
+            A mode is guided in the core if its effective index satisfies:
+            $$n_{\\text{clad}} < n_{\\text{eff}} < n_{\\text{core}}$$
+
+            #### 2. Confinement Factors ($\Gamma_{\\text{Core}}$ and $\Gamma_{\\text{Air}}$)
+            The fraction of power contained within the core or cladding region:
+            $$\\Gamma_{\\text{Core}} = \\frac{\\iint_{\\text{Core}} |E(x,y)|^2 dx dy}{\\iint_{\\text{Total}} |E(x,y)|^2 dx dy} \\times 100\\%$$
+            $$\\Gamma_{\\text{Air}} = \\frac{\\iint_{\\text{Air}} |E(x,y)|^2 dx dy}{\\iint_{\\text{Total}} |E(x,y)|^2 dx dy} \\times 100\\%$$
+
+            #### 3. Effective Mode Area ($A_{\\text{eff}}$) & Mode Field Diameter (MFD)
+            Calculated from the spatial field distribution:
+            $$A_{\\text{eff}} = \\frac{\\left( \\iint |E(x,y)|^2 dx dy \\right)^2}{\\iint |E(x,y)|^4 dx dy}, \\quad \\text{MFD} = 2 \\sqrt{\\frac{A_{\\text{eff}}}{\\pi}}$$
+
+            #### 4. Full Width at Half Maximum (FWHM)
+            The width of the intensity profile $|E|^2$ at half of its peak amplitude along the $X$ and $Y$ center axes.
+            """)
 
 # ==============================================================================
-# --- MODE 2: 1D PARAMETRIC SWEEP ---
+# --- MODE 2: FAST 1D PARAMETRIC SWEEP ---
 # ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
@@ -209,7 +268,7 @@ elif analysis_type == "1D Parametric Sweep":
             def update_prog_1d(curr, tot):
                 pct = int((curr / tot) * 100)
                 prog_bar_1d.progress(pct)
-                status_txt_1d.markdown(f"⏳ **Running 1D Sweep Point {curr}/{tot} ({pct}%)...**")
+                status_txt_1d.markdown(f"⏳ **Running Fast 1D Fundamental Mode Sweep {curr}/{tot} ({pct}%)...**")
 
             res_1d = run_1d_sweep(axis_1d, vec_1d, fixed_dict_1d, res_mode, core_material, pol_choice, progress_callback=update_prog_1d)
             status_txt_1d.success("✅ 1D Sweep completed!")
@@ -227,31 +286,21 @@ elif analysis_type == "1D Parametric Sweep":
             "📐 Effective Area (A_eff)"
         ])
 
-        styles = ['o-', 's--', '^:']
-
         with tab1:
             fig_n, ax_n = plt.subplots(figsize=(7, 4))
-            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
-                for m in range(3):
-                    if not np.all(np.isnan(s1['te'][m]['neff'])):
-                        ax_n.plot(s1['param_vec'], s1['te'][m]['neff'], f'b{styles[m]}', lw=2, label=f'TE{m}')
-            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
-                for m in range(3):
-                    if not np.all(np.isnan(s1['tm'][m]['neff'])):
-                        ax_n.plot(s1['param_vec'], s1['tm'][m]['neff'], f'r{styles[m]}', lw=2, label=f'TM{m}')
+            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_n.plot(s1['param_vec'], s1['neff_te'], 'bo-', lw=2, label='Quasi-TE0')
+            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_n.plot(s1['param_vec'], s1['neff_tm'], 'rs-', lw=2, label='Quasi-TM0')
             ax_n.grid(True); ax_n.legend(); ax_n.set_xlabel(s1['param_name']); ax_n.set_ylabel('Effective Index (n_eff)')
             st.pyplot(fig_n)
 
         with tab2:
             fig_c, ax_c = plt.subplots(figsize=(7, 4))
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
-                for m in range(3):
-                    if not np.all(np.isnan(s1['te'][m]['gamma_core'])):
-                        ax_c.plot(s1['param_vec'], s1['te'][m]['gamma_core'], f'b{styles[m]}', lw=2, label=f'Γ_Core (TE{m})')
+                ax_c.plot(s1['param_vec'], s1['gamma_core_te'], 'b-o', lw=2, label='Γ_Core (TE0)')
+                ax_c.plot(s1['param_vec'], s1['gamma_air_te'], 'b--^', lw=1.5, label='Γ_Air (TE0)')
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
-                for m in range(3):
-                    if not np.all(np.isnan(s1['tm'][m]['gamma_core'])):
-                        ax_c.plot(s1['param_vec'], s1['tm'][m]['gamma_core'], f'r{styles[m]}', lw=2, label=f'Γ_Core (TM{m})')
+                ax_c.plot(s1['param_vec'], s1['gamma_core_tm'], 'r-s', lw=2, label='Γ_Core (TM0)')
+                ax_c.plot(s1['param_vec'], s1['gamma_air_tm'], 'r--v', lw=1.5, label='Γ_Air (TM0)')
             ax_c.grid(True); ax_c.legend(); ax_c.set_xlabel(s1['param_name']); ax_c.set_ylabel('Confinement Factor [%]')
             st.pyplot(fig_c)
 
@@ -259,46 +308,32 @@ elif analysis_type == "1D Parametric Sweep":
             render_sample_3_fields(s1['sample_points'])
 
         with tab4:
-            fig_ng, ax_ng = plt.subplots(figsize=(7, 4))
-            has_ng = False
-            for pol_k, col_c in [('te', 'b'), ('tm', 'r')]:
-                for m in range(3):
-                    if 'ng' in s1[pol_k][m] and not np.all(np.isnan(s1[pol_k][m]['ng'])):
-                        ax_ng.plot(s1['param_vec'], s1[pol_k][m]['ng'], f'{col_c}{styles[m]}', lw=2, label=f'n_g ({pol_k.upper()}{m})')
-                        has_ng = True
-            if has_ng:
+            if 'ng_te' in s1 or 'ng_tm' in s1:
+                fig_ng, ax_ng = plt.subplots(figsize=(7, 4))
+                if 'ng_te' in s1: ax_ng.plot(s1['param_vec'], s1['ng_te'], 'bo-', lw=2, label='n_g (TE0)')
+                if 'ng_tm' in s1: ax_ng.plot(s1['param_vec'], s1['ng_tm'], 'rs-', lw=2, label='n_g (TM0)')
                 ax_ng.grid(True); ax_ng.legend(); ax_ng.set_xlabel(s1['param_name']); ax_ng.set_ylabel('Group Index (n_g)')
                 st.pyplot(fig_ng)
             else: st.info("Group Index n_g is calculated when scanning Wavelength.")
 
         with tab5:
-            fig_d, ax_d = plt.subplots(figsize=(7, 4))
-            has_d = False
-            for pol_k, col_c in [('te', 'b'), ('tm', 'r')]:
-                for m in range(3):
-                    if 'D' in s1[pol_k][m] and not np.all(np.isnan(s1[pol_k][m]['D'])):
-                        ax_d.plot(s1['param_vec'], s1[pol_k][m]['D'], f'{col_c}{styles[m]}', lw=2, label=f'Dispersion D ({pol_k.upper()}{m})')
-                        has_d = True
-            if has_d:
+            if 'D_te' in s1 or 'D_tm' in s1:
+                fig_d, ax_d = plt.subplots(figsize=(7, 4))
+                if 'D_te' in s1: ax_d.plot(s1['param_vec'], s1['D_te'], 'bo-', lw=2, label='Dispersion D (TE0)')
+                if 'D_tm' in s1: ax_d.plot(s1['param_vec'], s1['D_tm'], 'rs-', lw=2, label='Dispersion D (TM0)')
                 ax_d.grid(True); ax_d.legend(); ax_d.set_xlabel(s1['param_name']); ax_d.set_ylabel('D [ps/(nm·km)]')
                 st.pyplot(fig_d)
             else: st.info("Dispersion D is calculated when scanning Wavelength.")
 
         with tab6:
             fig_a, ax_a = plt.subplots(figsize=(7, 4))
-            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
-                for m in range(3):
-                    if not np.all(np.isnan(s1['te'][m]['a_eff'])):
-                        ax_a.plot(s1['param_vec'], s1['te'][m]['a_eff'], f'b{styles[m]}', lw=2, label=f'A_eff (TE{m})')
-            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
-                for m in range(3):
-                    if not np.all(np.isnan(s1['tm'][m]['a_eff'])):
-                        ax_a.plot(s1['param_vec'], s1['tm'][m]['a_eff'], f'r{styles[m]}', lw=2, label=f'A_eff (TM{m})')
+            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_a.plot(s1['param_vec'], s1['a_eff_te'], 'bo-', lw=2, label='A_eff (TE0)')
+            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_a.plot(s1['param_vec'], s1['a_eff_tm'], 'rs-', lw=2, label='A_eff (TM0)')
             ax_a.grid(True); ax_a.legend(); ax_a.set_xlabel(s1['param_name']); ax_a.set_ylabel('Effective Area A_eff [μm²]')
             st.pyplot(fig_a)
 
 # ==============================================================================
-# --- MODE 3: 2D UNIVERSAL PARAMETRIC SWEEP ---
+# --- MODE 3: FAST 2D UNIVERSAL PARAMETRIC SWEEP ---
 # ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
@@ -339,7 +374,7 @@ else:
             def update_prog(curr, tot):
                 pct = int((curr / tot) * 100)
                 prog_bar.progress(pct)
-                status_txt.markdown(f"⏳ **Running 2D Sweep Point {curr}/{tot} ({pct}%)...**")
+                status_txt.markdown(f"⏳ **Running Fast 2D Fundamental Mode Sweep {curr}/{tot} ({pct}%)...**")
 
             s_res = run_2d_universal_sweep(axis_x, vec_x, axis_y, vec_y, fixed_dict, res_mode, core_material, pol_choice, progress_callback=update_prog)
             status_txt.success("✅ 2D Sweep completed!")
@@ -360,14 +395,14 @@ else:
                 fig_c1, ax_c1 = plt.subplots(figsize=(6, 4))
                 cp1 = ax_c1.contourf(sr['vec1'], sr['vec2'], sr['gamma_core_te'], levels=10, cmap='jet')
                 fig_c1.colorbar(cp1, ax=ax_c1, label='Core Confinement TE [%]')
-                ax_c1.set_xlabel(sr['param1_name']); ax_c1.set_ylabel(sr['param2_name']); ax_c1.set_title("TE Core Confinement Γ_Core (%)")
+                ax_c1.set_xlabel(sr['param1_name']); ax_c1.set_ylabel(sr['param2_name']); ax_c1.set_title("TE0 Core Confinement Γ_Core (%)")
                 col_m1.pyplot(fig_c1)
 
             if sr['pol_choice'] in ["TM", "Both (TE & TM)"]:
                 fig_c2, ax_c2 = plt.subplots(figsize=(6, 4))
                 cp2 = ax_c2.contourf(sr['vec1'], sr['vec2'], sr['gamma_core_tm'], levels=10, cmap='jet')
                 fig_c2.colorbar(cp2, ax=ax_c2, label='Core Confinement TM [%]')
-                ax_c2.set_xlabel(sr['param1_name']); ax_c2.set_ylabel(sr['param2_name']); ax_c2.set_title("TM Core Confinement Γ_Core (%)")
+                ax_c2.set_xlabel(sr['param1_name']); ax_c2.set_ylabel(sr['param2_name']); ax_c2.set_title("TM0 Core Confinement Γ_Core (%)")
                 col_m2.pyplot(fig_c2)
 
         with tab2d_2:
@@ -376,14 +411,14 @@ else:
                 fig_a1, ax_a1 = plt.subplots(figsize=(6, 4))
                 cp_a1 = ax_a1.contourf(sr['vec1'], sr['vec2'], sr['gamma_air_te'], levels=10, cmap='jet')
                 fig_a1.colorbar(cp_a1, ax=ax_a1, label='Air Confinement TE [%]')
-                ax_a1.set_xlabel(sr['param1_name']); ax_a1.set_ylabel(sr['param2_name']); ax_a1.set_title("TE Air Confinement Γ_Air (%)")
+                ax_a1.set_xlabel(sr['param1_name']); ax_a1.set_ylabel(sr['param2_name']); ax_a1.set_title("TE0 Air Confinement Γ_Air (%)")
                 col_a1.pyplot(fig_a1)
 
             if sr['pol_choice'] in ["TM", "Both (TE & TM)"]:
                 fig_a2, ax_a2 = plt.subplots(figsize=(6, 4))
                 cp_a2 = ax_a2.contourf(sr['vec1'], sr['vec2'], sr['gamma_air_tm'], levels=10, cmap='jet')
                 fig_a2.colorbar(cp_a2, ax=ax_a2, label='Air Confinement TM [%]')
-                ax_a2.set_xlabel(sr['param1_name']); ax_a2.set_ylabel(sr['param2_name']); ax_a2.set_title("TM Air Confinement Γ_Air (%)")
+                ax_a2.set_xlabel(sr['param1_name']); ax_a2.set_ylabel(sr['param2_name']); ax_a2.set_title("TM0 Air Confinement Γ_Air (%)")
                 col_a2.pyplot(fig_a2)
 
         with tab2d_3:
