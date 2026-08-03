@@ -284,10 +284,374 @@ if analysis_type == "Single Point Analysis":
             st.markdown("""
             ### 📖 Mathematical Equations & Physical Definitions
             * **Effective Index:** $n_{\\text{clad}} < n_{\\text{eff}} < n_{\\text{core}}$
-            * **Confinement Factor:** $\\Gamma_{\\text{Core}} = \\frac{\\iint_{\\text{Core}} \vert{}E\vert{}^2 dx dy}{\\iint \vert{}E\vert{}^2 dx dy} \\times 100\\%$
-            * **Effective Area:** $A_{\\text{eff}} = \\frac{\\left( \\iint \vert{}E\vert{}^2 dx dy \\right)^2}{\\iint \vert{}E\vert{}^4 dx dy}$
+            * **Confinement Factor:** $\\Gamma_{\\text{Core}} = \\frac{\\iint_{\\text{Core}} |E|^2 dx dy}{\\iint |E|^2 dx dy} \\times 100\\%$
+            * **Effective Area:** $A_{\\text{eff}} = \\frac{\\left( \\iint |E|^2 dx dy \\right)^2}{\\iint |E|^4 dx dy}$
             """)
 
         # EXPORT SECTION
         st.markdown("---")
-        st.subheader("📥 Export
+        st.subheader("📥 Export Results & Reports")
+        c_exp1, c_exp2 = st.columns(2)
+        
+        # Summary dict for PDF
+        summary_info = {
+            "Core Material": core_material,
+            "Wavelength [μm]": lam_um,
+            "Core Width [μm]": w_core,
+            "Core Height [μm]": h_core,
+            "Top Oxide [μm]": top_ox,
+            "BOX Thickness [μm]": bottom_ox,
+            "Bound TE Modes": len(r['te_modes']),
+            "Bound TM Modes": len(r['tm_modes'])
+        }
+        if len(r['te_modes']) > 0:
+            summary_info["TE0 Effective Index"] = f"{r['te_modes'][0]['neff']:.5f}"
+            summary_info["TE0 Core Confinement"] = f"{r['te_modes'][0]['gamma_core']:.2f}%"
+        if len(r['tm_modes']) > 0:
+            summary_info["TM0 Effective Index"] = f"{r['tm_modes'][0]['neff']:.5f}"
+            summary_info["TM0 Core Confinement"] = f"{r['tm_modes'][0]['gamma_core']:.2f}%"
+
+        with c_exp1:
+            pdf_bytes = create_pdf_report("Single Point Mode Analysis Report", summary_info, figs_for_pdf)
+            st.download_button(
+                label="📄 Download Summary PDF Report",
+                data=pdf_bytes,
+                file_name=f"single_point_mode_report_{core_material}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            
+        with c_exp2:
+            csv_df = pd.DataFrame([summary_info])
+            st.download_button(
+                label="📊 Download Results CSV",
+                data=csv_df.to_csv(index=False).encode('utf-8'),
+                file_name=f"single_point_results_{core_material}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+# ==============================================================================
+# --- MODE 2: FAST 1D PARAMETRIC SWEEP ---
+# ==============================================================================
+elif analysis_type == "1D Parametric Sweep":
+    st.sidebar.header("🎯 1D Scan Parameter Controls")
+    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Oxide Top Thickness"]
+    axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=0)
+
+    def_min = 1.50 if axis_1d == "Wavelength" else (0.6 if axis_1d == "Waveguide Width" else 0.2)
+    def_max = 1.60 if axis_1d == "Wavelength" else (1.8 if axis_1d == "Waveguide Width" else 0.6)
+    def_pts = 11
+
+    c_min, c_max, c_pts = st.sidebar.columns(3)
+    val_min = c_min.number_input("Min", value=def_min, step=0.05)
+    val_max = c_max.number_input("Max", value=def_max, step=0.05)
+    num_pts = c_pts.number_input("Points", value=def_pts, min_value=3, max_value=51, step=2)
+
+    rem_params_1d = [p for p in param_options if p != axis_1d]
+    fixed_dict_1d = {}
+    st.sidebar.markdown("**Fixed Parameters:**")
+    for p in rem_params_1d:
+        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (1.55 if p=="Wavelength" else 0.1))
+        fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
+    fixed_dict_1d["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
+
+    run_1d_btn = st.sidebar.button("🚀 Run 1D Sweep", type="primary", use_container_width=True)
+
+    if run_1d_btn or 'sweep_1d_results' in st.session_state:
+        if run_1d_btn:
+            vec_1d = np.linspace(val_min, val_max, int(num_pts))
+            prog_bar_1d = st.progress(0)
+            status_txt_1d = st.empty()
+
+            def update_prog_1d(curr, tot):
+                pct = int((curr / tot) * 100)
+                prog_bar_1d.progress(pct)
+                status_txt_1d.markdown(f"⏳ **Running 1D Fundamental Mode Sweep {curr}/{tot} ({pct}%)...**")
+
+            res_1d = run_1d_sweep(axis_1d, vec_1d, fixed_dict_1d, res_mode, core_material, pol_choice, progress_callback=update_prog_1d)
+            status_txt_1d.success("✅ 1D Sweep completed!")
+            time.sleep(0.5); status_txt_1d.empty(); prog_bar_1d.empty()
+            st.session_state['sweep_1d_results'] = res_1d
+
+        s1 = st.session_state['sweep_1d_results']
+        figs_for_pdf_1d = {}
+
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "📈 Effective Index (n_eff)",
+            "🎯 Confinement Factor (Γ)",
+            "🖼️ Sample Field Profiles (Min/Mid/Max)",
+            "⚡ Group Index (n_g)",
+            "🌊 Dispersion (D)",
+            "📐 Effective Area (A_eff)"
+        ])
+
+        with tab1:
+            fig_n, ax_n = plt.subplots(figsize=(7, 4))
+            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_n.plot(s1['param_vec'], s1['neff_te'], 'bo-', lw=2, label='Quasi-TE0')
+            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_n.plot(s1['param_vec'], s1['neff_tm'], 'rs-', lw=2, label='Quasi-TM0')
+            ax_n.grid(True); ax_n.legend(); ax_n.set_xlabel(s1['param_name']); ax_n.set_ylabel('Effective Index (n_eff)')
+            st.pyplot(fig_n)
+            figs_for_pdf_1d["Effective Index Dispersion"] = fig_n
+
+        with tab2:
+            fig_c, ax_c = plt.subplots(figsize=(7, 4))
+            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
+                ax_c.plot(s1['param_vec'], s1['gamma_core_te'], 'b-o', lw=2, label='Γ_Core (TE0)')
+                ax_c.plot(s1['param_vec'], s1['gamma_air_te'], 'b--^', lw=1.5, label='Γ_Air (TE0)')
+            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
+                ax_c.plot(s1['param_vec'], s1['gamma_core_tm'], 'r-s', lw=2, label='Γ_Core (TM0)')
+                ax_c.plot(s1['param_vec'], s1['gamma_air_tm'], 'r--v', lw=1.5, label='Γ_Air (TM0)')
+            ax_c.grid(True); ax_c.legend(); ax_c.set_xlabel(s1['param_name']); ax_c.set_ylabel('Confinement Factor [%]')
+            st.pyplot(fig_c)
+            figs_for_pdf_1d["Confinement Factors"] = fig_c
+
+        with tab3:
+            render_sample_3_fields(s1['sample_points'])
+
+        with tab4:
+            if 'ng_te' in s1 or 'ng_tm' in s1:
+                fig_ng, ax_ng = plt.subplots(figsize=(7, 4))
+                if 'ng_te' in s1: ax_ng.plot(s1['param_vec'], s1['ng_te'], 'bo-', lw=2, label='n_g (TE0)')
+                if 'ng_tm' in s1: ax_ng.plot(s1['param_vec'], s1['ng_tm'], 'rs-', lw=2, label='n_g (TM0)')
+                ax_ng.grid(True); ax_ng.legend(); ax_ng.set_xlabel(s1['param_name']); ax_ng.set_ylabel('Group Index (n_g)')
+                st.pyplot(fig_ng)
+                figs_for_pdf_1d["Group Index (ng)"] = fig_ng
+            else: st.info("Group Index n_g is calculated when scanning Wavelength.")
+
+        with tab5:
+            if 'D_te' in s1 or 'D_tm' in s1:
+                fig_d, ax_d = plt.subplots(figsize=(7, 4))
+                if 'D_te' in s1: ax_d.plot(s1['param_vec'], s1['D_te'], 'bo-', lw=2, label='Dispersion D (TE0)')
+                if 'D_tm' in s1: ax_d.plot(s1['param_vec'], s1['D_tm'], 'rs-', lw=2, label='Dispersion D (TM0)')
+                ax_d.grid(True); ax_d.legend(); ax_d.set_xlabel(s1['param_name']); ax_d.set_ylabel('D [ps/(nm·km)]')
+                st.pyplot(fig_d)
+                figs_for_pdf_1d["Chromatic Dispersion (D)"] = fig_d
+            else: st.info("Dispersion D is calculated when scanning Wavelength.")
+
+        with tab6:
+            fig_a, ax_a = plt.subplots(figsize=(7, 4))
+            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_a.plot(s1['param_vec'], s1['a_eff_te'], 'bo-', lw=2, label='A_eff (TE0)')
+            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_a.plot(s1['param_vec'], s1['a_eff_tm'], 'rs-', lw=2, label='A_eff (TM0)')
+            ax_a.grid(True); ax_a.legend(); ax_a.set_xlabel(s1['param_name']); ax_a.set_ylabel('Effective Area A_eff [μm²]')
+            st.pyplot(fig_a)
+            figs_for_pdf_1d["Effective Mode Area"] = fig_a
+
+        # EXPORT SECTION 1D
+        st.markdown("---")
+        st.subheader("📥 Export Results & Reports")
+        c1d_exp1, c1d_exp2 = st.columns(2)
+        
+        sum_1d = {
+            "Core Material": core_material,
+            "Scanned Parameter": axis_1d,
+            "Range": f"{s1['param_vec'][0]:.3f} to {s1['param_vec'][-1]:.3f}",
+            "Points": len(s1['param_vec'])
+        }
+
+        with c1d_exp1:
+            pdf_bytes_1d = create_pdf_report(f"1D Parametric Sweep ({axis_1d}) Report", sum_1d, figs_for_pdf_1d)
+            st.download_button(
+                label="📄 Download 1D Sweep PDF Report",
+                data=pdf_bytes_1d,
+                file_name=f"1D_sweep_report_{axis_1d}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            
+        with c1d_exp2:
+            data_dict_1d = {axis_1d: s1['param_vec']}
+            if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
+                data_dict_1d['neff_TE0'] = s1['neff_te']
+                data_dict_1d['Gamma_Core_TE0'] = s1['gamma_core_te']
+            if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
+                data_dict_1d['neff_TM0'] = s1['neff_tm']
+                data_dict_1d['Gamma_Core_TM0'] = s1['gamma_core_tm']
+                
+            csv_df_1d = pd.DataFrame(data_dict_1d)
+            st.download_button(
+                label="📊 Download 1D Sweep CSV Data",
+                data=csv_df_1d.to_csv(index=False).encode('utf-8'),
+                file_name=f"1D_sweep_data_{axis_1d}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+# ==============================================================================
+# --- MODE 3: FAST 2D UNIVERSAL PARAMETRIC SWEEP ---
+# ==============================================================================
+else:
+    st.sidebar.header("🎯 2D Scan Axes Controls")
+    param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Oxide Top Thickness"]
+    axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=2)
+    axis_y = st.sidebar.selectbox("Second Scan Axis (Y)", options=[p for p in param_options if p != axis_x], index=0)
+
+    st.sidebar.markdown(f"**Axis X ({axis_x}) Range:**")
+    cx_min, cx_max, cx_pts = st.sidebar.columns(3)
+    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else 0.6, key="vx_min")
+    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else 1.8, key="vx_max")
+    nx_pts = cx_pts.number_input("Pts X", value=7, min_value=3, max_value=21, key="nx_pts")
+
+    st.sidebar.markdown(f"**Axis Y ({axis_y}) Range:**")
+    cy_min, cy_max, cy_pts = st.sidebar.columns(3)
+    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else 0.6, key="vy_min")
+    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else 1.8, key="vy_max")
+    ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
+
+    remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
+    fixed_dict = {}
+    st.sidebar.markdown("**Fixed Parameters:**")
+    for p in remaining_params:
+        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (1.55 if p=="Wavelength" else 0.1))
+        fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
+    fixed_dict["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
+
+    run_2d_btn = st.sidebar.button("🚀 Run 2D Confinement Sweep", type="primary", use_container_width=True)
+
+    if run_2d_btn or 'sweep_2d_results' in st.session_state:
+        if run_2d_btn:
+            vec_x = np.linspace(vx_min, vx_max, int(nx_pts))
+            vec_y = np.linspace(vy_min, vy_max, int(ny_pts))
+            
+            prog_bar = st.progress(0)
+            status_txt = st.empty()
+
+            def update_prog(curr, tot):
+                pct = int((curr / tot) * 100)
+                prog_bar.progress(pct)
+                status_txt.markdown(f"⏳ **Running 2D Fundamental Mode Sweep {curr}/{tot} ({pct}%)...**")
+
+            s_res = run_2d_universal_sweep(axis_x, vec_x, axis_y, vec_y, fixed_dict, res_mode, core_material, pol_choice, progress_callback=update_prog)
+            status_txt.success("✅ 2D Sweep completed!")
+            time.sleep(0.5); status_txt.empty(); prog_bar.empty()
+            st.session_state['sweep_2d_results'] = s_res
+
+        sr = st.session_state['sweep_2d_results']
+        figs_for_pdf_2d = {}
+
+        tab2d_1, tab2d_2, tab2d_3 = st.tabs([
+            "🗺️ Core Confinement Maps (Γ_Core)",
+            "🗺️ Air Cladding Confinement Maps (Γ_Air)",
+            "🖼️ Sample Field Profiles (Min/Mid/Max)"
+        ])
+
+        with tab2d_1:
+            col_m1, col_m2 = st.columns(2)
+            if sr['pol_choice'] in ["TE", "Both (TE & TM)"]:
+                fig_c1, ax_c1 = plt.subplots(figsize=(6, 4))
+                cp1 = ax_c1.contourf(sr['vec1'], sr['vec2'], sr['gamma_core_te'], levels=10, cmap='jet')
+                fig_c1.colorbar(cp1, ax=ax_c1, label='Core Confinement TE [%]')
+                ax_c1.set_xlabel(sr['param1_name']); ax_c1.set_ylabel(sr['param2_name']); ax_c1.set_title("TE0 Core Confinement Γ_Core (%)")
+                col_m1.pyplot(fig_c1)
+                figs_for_pdf_2d["TE0 Core Confinement Contour"] = fig_c1
+
+            if sr['pol_choice'] in ["TM", "Both (TE & TM)"]:
+                fig_c2, ax_c2 = plt.subplots(figsize=(6, 4))
+                cp2 = ax_c2.contourf(sr['vec1'], sr['vec2'], sr['gamma_core_tm'], levels=10, cmap='jet')
+                fig_c2.colorbar(cp2, ax=ax_c2, label='Core Confinement TM [%]')
+                ax_c2.set_xlabel(sr['param1_name']); ax_c2.set_ylabel(sr['param2_name']); ax_c2.set_title("TM0 Core Confinement Γ_Core (%)")
+                col_m2.pyplot(fig_c2)
+                figs_for_pdf_2d["TM0 Core Confinement Contour"] = fig_c2
+
+        with tab2d_2:
+            col_a1, col_a2 = st.columns(2)
+            if sr['pol_choice'] in ["TE", "Both (TE & TM)"]:
+                fig_a1, ax_a1 = plt.subplots(figsize=(6, 4))
+                cp_a1 = ax_a1.contourf(sr['vec1'], sr['vec2'], sr['gamma_air_te'], levels=10, cmap='jet')
+                fig_a1.colorbar(cp_a1, ax=ax_a1, label='Air Confinement TE [%]')
+                ax_a1.set_xlabel(sr['param1_name']); ax_a1.set_ylabel(sr['param2_name']); ax_a1.set_title("TE0 Air Confinement Γ_Air (%)")
+                col_a1.pyplot(fig_a1)
+                figs_for_pdf_2d["TE0 Air Confinement Contour"] = fig_a1
+
+            if sr['pol_choice'] in ["TM", "Both (TE & TM)"]:
+                fig_a2, ax_a2 = plt.subplots(figsize=(6, 4))
+                cp_a2 = ax_a2.contourf(sr['vec1'], sr['vec2'], sr['gamma_air_tm'], levels=10, cmap='jet')
+                fig_a2.colorbar(cp_a2, ax=ax_a2, label='Air Confinement TM [%]')
+                ax_a2.set_xlabel(sr['param1_name']); ax_a2.set_ylabel(sr['param2_name']); ax_a2.set_title("TM0 Air Confinement Γ_Air (%)")
+                col_a2.pyplot(fig_a2)
+                figs_for_pdf_2d["TM0 Air Confinement Contour"] = fig_a2
+
+        with tab2d_3:
+            render_sample_3_fields(sr['sample_points'])
+
+        # EXPORT SECTION 2D
+        st.markdown("---")
+        st.subheader("📥 Export Results & Reports")
+        c2d_exp1, c2d_exp2 = st.columns(2)
+        
+        sum_2d = {
+            "Core Material": core_material,
+            "Axis X Parameter": axis_x,
+            "Axis Y Parameter": axis_y,
+            "Total Grid Points": f"{len(sr['vec1'])} x {len(sr['vec2'])}"
+        }
+
+        with c2d_exp1:
+            pdf_bytes_2d = create_pdf_report(f"2D Confinement Sweep ({axis_x} vs {axis_y}) Report", sum_2d, figs_for_pdf_2d)
+            st.download_button(
+                label="📄 Download 2D Sweep PDF Report",
+                data=pdf_bytes_2d,
+                file_name=f"2D_sweep_report_{axis_x}_vs_{axis_y}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            
+        with c2d_exp2:
+            st.download_button(
+                label="📊 Download TE0 Core Confinement Matrix CSV",
+                data=pd.DataFrame(sr['gamma_core_te'], index=np.round(sr['vec2'], 3), columns=np.round(sr['vec1'], 3)).to_csv().encode('utf-8'),
+                file_name=f"2D_TE0_Core_Confinement_{axis_x}_vs_{axis_y}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+# ==============================================================================
+# --- PREVIEW / CAROUSEL DISPLAY (INITIAL LOAD) ---
+# ==============================================================================
+if 'sp_results' not in st.session_state and 'sweep_1d_results' not in st.session_state and 'sweep_2d_results' not in st.session_state:
+    st.info("👈 Select core material and physical geometry in the sidebar, then click **Calculate** 🚀")
+    
+    st.markdown("### 🔬 Reference Modal Profiles & Numerical Benchmarks 🎨")
+    st.markdown("Below are standard reference solutions calculated for a single channel optical waveguide:")
+
+    preview_items = [
+        {"file": "index_profile.png", "title": "1. Waveguide Refractive Index Distribution n(x,y) 📐"},
+        {"file": "even_mode.png", "title": "2. Fundamental Quasi-TE Mode Field Profile ⚡"},
+        {"file": "1d_profiles.png", "title": "3. 1D Transverse Field Profile at Core Center 📊"},
+        {"file": "dispersion.png", "title": "4. Waveguide Dispersion Characteristics n_eff(λ) 📈"}
+    ]
+    
+    valid_items = [item for item in preview_items if os.path.exists(item["file"])]
+    if valid_items:
+        encoded_slides = []
+        for idx, item in enumerate(valid_items):
+            with open(item["file"], "rb") as img_f:
+                b64 = base64.b64encode(img_f.read()).decode()
+            encoded_slides.append(f"""
+                <div class="mySlides fade" style="display: {'block' if idx==0 else 'none'}; text-align: center;">
+                    <div style="font-weight: 600; font-size: 15px; margin-bottom: 10px; color: #0F172A; font-family: sans-serif;">
+                        {item['title']}
+                    </div>
+                    <img src="data:image/png;base64,{b64}" style="max-width: 80%; height: auto; border-radius: 8px; border: 1px solid #CBD5E1; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                </div>
+            """)
+
+        carousel_html = f"""
+        <div id="slideshow-container" style="max-width: 750px; position: relative; margin: 10px auto; padding: 18px; background: #F8FAFC; border-radius: 12px; border: 1px solid #E2E8F0;">
+            {''.join(encoded_slides)}
+        </div>
+        <script>
+            let slideIndex = 0;
+            showSlides();
+            function showSlides() {{
+                let i;
+                let slides = document.getElementsByClassName("mySlides");
+                for (i = 0; i < slides.length; i++) {{ slides[i].style.display = "none"; }}
+                slideIndex++;
+                if (slideIndex > slides.length) {{slideIndex = 1}}    
+                if (slides[slideIndex-1]) {{ slides[slideIndex-1].style.display = "block"; }}
+                setTimeout(showSlides, 3000);
+            }}
+        </script>
+        """
+        st.components.v1.html(carousel_html, height=480)
