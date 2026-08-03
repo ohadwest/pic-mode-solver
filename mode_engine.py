@@ -75,13 +75,13 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     
     interface_y = bottom_ox + h_core + top_ox
     air_mask_1d = yc > interface_y
-    eps[:, air_mask_1d] = 1.0**2  # Air
+    eps[:, air_mask_1d] = 1.0**2  # Air n=1
     
     air_mask = np.repeat(air_mask_1d[None, :], len(xc), axis=0)
     
     return xc, yc, eps, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max
 
-# --- 2D SVFD SOLVER ---
+# --- RIGOROUS 2D SVFD EIGENMODE SOLVER ---
 
 def svmodes_2d(lam_um, guess, nmodes, dx, dy, eps_mesh, polarization='ex'):
     nx, ny = eps_mesh.shape
@@ -167,7 +167,7 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice
     }
     
-    if pol_choice in ["TE", "Both"]:
+    if pol_choice in ["TE", "Both (TE & TM)"]:
         guess_te = (n_core + n_clad) / 2.0
         phi_te, neff_te = svmodes_2d(lam_um, guess_te, 1, dx, dy, eps_mesh, 'ex')
         p_te = phi_te[:, :, 0]
@@ -176,6 +176,108 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
         res['neff_te'] = neff_te[0]
         res['gamma_core_te'] = (np.sum(p_te[core_mask]**2) / tot_te) * 100.0 if tot_te > 0 else 0.0
         res['gamma_air_te'] = (np.sum(p_te[air_mask]**2) / tot_te) * 100.0 if tot_te > 0 else 0.0
-        res['a_eff_te'] = ((np.sum(p_te**2) * dx * dy)**2) / (np.sum(p_te**4) * dx * dy)
+        res['a_eff_te'] = ((np.sum(p_te**2) * dx * dy)**2) / (np.sum(p_te**4) * dx * dy) if np.sum(p_te**4) > 0 else 0.0
         
-    if pol_choice
+    if pol_choice in ["TM", "Both (TE & TM)"]:
+        guess_tm = (n_core + 2*n_clad) / 3.0
+        phi_tm, neff_tm = svmodes_2d(lam_um, guess_tm, 1, dx, dy, eps_mesh, 'ey')
+        p_tm = phi_tm[:, :, 0]
+        tot_tm = np.sum(p_tm**2)
+        res['phi_tm'] = p_tm
+        res['neff_tm'] = neff_tm[0]
+        res['gamma_core_tm'] = (np.sum(p_tm[core_mask]**2) / tot_tm) * 100.0 if tot_tm > 0 else 0.0
+        res['gamma_air_tm'] = (np.sum(p_tm[air_mask]**2) / tot_tm) * 100.0 if tot_tm > 0 else 0.0
+        res['a_eff_tm'] = ((np.sum(p_tm**2) * dx * dy)**2) / (np.sum(p_tm**4) * dx * dy) if np.sum(p_tm**4) > 0 else 0.0
+        
+    return res
+
+def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, pol_choice="Both (TE & TM)", progress_callback=None):
+    n_pts = len(param_vec)
+    res = {
+        'param_name': param_name, 'param_vec': param_vec, 'pol_choice': pol_choice,
+        'neff_te': np.zeros(n_pts), 'neff_tm': np.zeros(n_pts),
+        'gamma_core_te': np.zeros(n_pts), 'gamma_core_tm': np.zeros(n_pts),
+        'gamma_air_te': np.zeros(n_pts), 'gamma_air_tm': np.zeros(n_pts),
+        'a_eff_te': np.zeros(n_pts), 'a_eff_tm': np.zeros(n_pts)
+    }
+    
+    for i, val in enumerate(param_vec):
+        if progress_callback: progress_callback(i + 1, n_pts)
+        p_dict = fixed_params.copy()
+        p_dict[param_name] = val
+        
+        sp_res = run_single_point(
+            p_dict['Waveguide Width'], p_dict['Waveguide Height'],
+            p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
+            p_dict['Wavelength'], res_mode, core_material, pol_choice
+        )
+        
+        if pol_choice in ["TE", "Both (TE & TM)"]:
+            res['neff_te'][i] = sp_res['neff_te']
+            res['gamma_core_te'][i] = sp_res['gamma_core_te']
+            res['gamma_air_te'][i] = sp_res['gamma_air_te']
+            res['a_eff_te'][i] = sp_res['a_eff_te']
+            
+        if pol_choice in ["TM", "Both (TE & TM)"]:
+            res['neff_tm'][i] = sp_res['neff_tm']
+            res['gamma_core_tm'][i] = sp_res['gamma_core_tm']
+            res['gamma_air_tm'][i] = sp_res['gamma_air_tm']
+            res['a_eff_tm'][i] = sp_res['a_eff_tm']
+
+    if param_name == "Wavelength" and n_pts >= 3:
+        dlam = (param_vec[-1] - param_vec[0]) / (n_pts - 1)
+        c_speed = 299792458.0  # m/s
+        
+        if pol_choice in ["TE", "Both (TE & TM)"]:
+            dneff_dlam = np.gradient(res['neff_te'], dlam)
+            d2neff_dlam2 = np.gradient(dneff_dlam, dlam)
+            res['ng_te'] = res['neff_te'] - param_vec * dneff_dlam
+            res['D_te'] = -(param_vec * 1e-6 / c_speed) * (d2neff_dlam2 * 1e12) * 1e-3 # ps/(nm*km)
+            
+        if pol_choice in ["TM", "Both (TE & TM)"]:
+            dneff_dlam = np.gradient(res['neff_tm'], dlam)
+            d2neff_dlam2 = np.gradient(dneff_dlam, dlam)
+            res['ng_tm'] = res['neff_tm'] - param_vec * dneff_dlam
+            res['D_tm'] = -(param_vec * 1e-6 / c_speed) * (d2neff_dlam2 * 1e12) * 1e-3
+            
+    return res
+
+def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, res_mode, core_material, pol_choice="Both (TE & TM)", progress_callback=None):
+    n1, n2 = len(vec1), len(vec2)
+    total_sims = n1 * n2
+    
+    res = {
+        'vec1': vec1, 'vec2': vec2,
+        'param1_name': param1_name, 'param2_name': param2_name, 'pol_choice': pol_choice,
+        'neff_te': np.zeros((n2, n1)), 'neff_tm': np.zeros((n2, n1)),
+        'gamma_core_te': np.zeros((n2, n1)), 'gamma_core_tm': np.zeros((n2, n1)),
+        'gamma_air_te': np.zeros((n2, n1)), 'gamma_air_tm': np.zeros((n2, n1))
+    }
+    
+    count = 0
+    for j, val2 in enumerate(vec2):
+        for i, val1 in enumerate(vec1):
+            count += 1
+            if progress_callback: progress_callback(count, total_sims)
+            
+            p_dict = fixed_params.copy()
+            p_dict[param1_name] = val1
+            p_dict[param2_name] = val2
+            
+            sp_res = run_single_point(
+                p_dict['Waveguide Width'], p_dict['Waveguide Height'],
+                p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
+                p_dict['Wavelength'], res_mode, core_material, pol_choice
+            )
+            
+            if pol_choice in ["TE", "Both (TE & TM)"]:
+                res['neff_te'][j, i] = sp_res['neff_te']
+                res['gamma_core_te'][j, i] = sp_res['gamma_core_te']
+                res['gamma_air_te'][j, i] = sp_res['gamma_air_te']
+                
+            if pol_choice in ["TM", "Both (TE & TM)"]:
+                res['neff_tm'][j, i] = sp_res['neff_tm']
+                res['gamma_core_tm'][j, i] = sp_res['gamma_core_tm']
+                res['gamma_air_tm'][j, i] = sp_res['gamma_air_tm']
+                
+    return res
