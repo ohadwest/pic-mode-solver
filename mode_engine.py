@@ -137,9 +137,16 @@ def svmodes_2d(lam_um, guess, nmodes, dx, dy, eps_mesh, polarization='ex'):
         
     return phi_modes, neff_vals
 
-# --- SIMULATION ENGINES ---
+# --- HELPER: FWHM CALCULATION ---
+def calc_fwhm(vec, profile):
+    half_max = np.max(profile) / 2.0
+    above = np.where(profile >= half_max)[0]
+    if len(above) >= 2:
+        return float(vec[above[-1]] - vec[above[0]])
+    return 0.0
 
-def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)"):
+# --- SINGLE POINT SOLVER ---
+def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False):
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
     n_core = get_core_index(lam_um, core_material)
     n_clad = sellmeier_sio2(lam_um)
@@ -155,7 +162,10 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
         'te_modes': [], 'tm_modes': []
     }
     
-    max_search_modes = 8
+    max_search_modes = 8 if search_higher_modes else 1
+    
+    mid_y_idx = np.argmin(np.abs(yc - (bottom_ox + h_core / 2.0)))
+    mid_x_idx = len(xc) // 2
     
     if pol_choice in ["TE", "Both (TE & TM)"]:
         guess_te = n_core - 0.01
@@ -166,13 +176,19 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
             tot_p = np.sum(p_m**2)
             g_core = (np.sum(p_m[core_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
             g_air = (np.sum(p_m[air_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
+            a_eff = ((tot_p * dx * dy)**2) / (np.sum(p_m**4) * dx * dy) if np.sum(p_m**4) > 0 else 0.0
+            
+            fwhm_x = calc_fwhm(xc, p_m[:, mid_y_idx]**2)
+            fwhm_y = calc_fwhm(yc, p_m[mid_x_idx, :]**2)
             
             if n_val > (n_clad + 0.001) and g_core > 5.0:
                 res['te_modes'].append({
                     'mode_num': len(res['te_modes']),
                     'neff': n_val, 'field': p_m,
                     'gamma_core': g_core, 'gamma_air': g_air,
-                    'a_eff': ((tot_p * dx * dy)**2) / (np.sum(p_m**4) * dx * dy) if np.sum(p_m**4) > 0 else 0.0
+                    'a_eff': a_eff, 'mfd': 2.0 * np.sqrt(a_eff / np.pi) if a_eff > 0 else 0.0,
+                    'fwhm_x': fwhm_x, 'fwhm_y': fwhm_y,
+                    'cut_x': p_m[:, mid_y_idx], 'cut_y': p_m[mid_x_idx, :]
                 })
                 
     if pol_choice in ["TM", "Both (TE & TM)"]:
@@ -184,26 +200,34 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
             tot_p = np.sum(p_m**2)
             g_core = (np.sum(p_m[core_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
             g_air = (np.sum(p_m[air_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
+            a_eff = ((tot_p * dx * dy)**2) / (np.sum(p_m**4) * dx * dy) if np.sum(p_m**4) > 0 else 0.0
+            
+            fwhm_x = calc_fwhm(xc, p_m[:, mid_y_idx]**2)
+            fwhm_y = calc_fwhm(yc, p_m[mid_x_idx, :]**2)
             
             if n_val > (n_clad + 0.001) and g_core > 5.0:
                 res['tm_modes'].append({
                     'mode_num': len(res['tm_modes']),
                     'neff': n_val, 'field': p_m,
                     'gamma_core': g_core, 'gamma_air': g_air,
-                    'a_eff': ((tot_p * dx * dy)**2) / (np.sum(p_m**4) * dx * dy) if np.sum(p_m**4) > 0 else 0.0
+                    'a_eff': a_eff, 'mfd': 2.0 * np.sqrt(a_eff / np.pi) if a_eff > 0 else 0.0,
+                    'fwhm_x': fwhm_x, 'fwhm_y': fwhm_y,
+                    'cut_x': p_m[:, mid_y_idx], 'cut_y': p_m[mid_x_idx, :]
                 })
                 
     return res
 
+# --- FAST 1D SWEEP (FUNDAMENTAL MODE ONLY) ---
 def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, pol_choice="Both (TE & TM)", progress_callback=None):
     n_pts = len(param_vec)
-    max_modes = 3  # Up to 3 fundamental/higher-order modes (M0, M1, M2)
     
     res = {
         'param_name': param_name, 'param_vec': param_vec, 'pol_choice': pol_choice,
         'sample_points': {},
-        'te': {m: {'neff': np.full(n_pts, np.nan), 'gamma_core': np.full(n_pts, np.nan), 'gamma_air': np.full(n_pts, np.nan), 'a_eff': np.full(n_pts, np.nan)} for m in range(max_modes)},
-        'tm': {m: {'neff': np.full(n_pts, np.nan), 'gamma_core': np.full(n_pts, np.nan), 'gamma_air': np.full(n_pts, np.nan), 'a_eff': np.full(n_pts, np.nan)} for m in range(max_modes)}
+        'neff_te': np.full(n_pts, np.nan), 'neff_tm': np.full(n_pts, np.nan),
+        'gamma_core_te': np.full(n_pts, np.nan), 'gamma_core_tm': np.full(n_pts, np.nan),
+        'gamma_air_te': np.full(n_pts, np.nan), 'gamma_air_tm': np.full(n_pts, np.nan),
+        'a_eff_te': np.full(n_pts, np.nan), 'a_eff_tm': np.full(n_pts, np.nan)
     }
     
     sample_indices = [0, n_pts // 2, n_pts - 1]
@@ -213,60 +237,52 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         p_dict = fixed_params.copy()
         p_dict[param_name] = val
         
+        # Fast execution: search_higher_modes = False
         sp_res = run_single_point(
             p_dict['Waveguide Width'], p_dict['Waveguide Height'],
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
-            p_dict['Wavelength'], res_mode, core_material, pol_choice
+            p_dict['Wavelength'], res_mode, core_material, pol_choice,
+            search_higher_modes=False
         )
         
         if i in sample_indices:
             tag = "Min" if i == 0 else ("Mid" if i == sample_indices[1] else "Max")
             res['sample_points'][tag] = {'val': val, 'res': sp_res}
             
-        # Store TE modes up to 3
-        if pol_choice in ["TE", "Both (TE & TM)"]:
-            for m_idx, m_data in enumerate(sp_res['te_modes'][:max_modes]):
-                res['te'][m_idx]['neff'][i] = m_data['neff']
-                res['te'][m_idx]['gamma_core'][i] = m_data['gamma_core']
-                res['te'][m_idx]['gamma_air'][i] = m_data['gamma_air']
-                res['te'][m_idx]['a_eff'][i] = m_data['a_eff']
-                
-        # Store TM modes up to 3
-        if pol_choice in ["TM", "Both (TE & TM)"]:
-            for m_idx, m_data in enumerate(sp_res['tm_modes'][:max_modes]):
-                res['tm'][m_idx]['neff'][i] = m_data['neff']
-                res['tm'][m_idx]['gamma_core'][i] = m_data['gamma_core']
-                res['tm'][m_idx]['gamma_air'][i] = m_data['gamma_air']
-                res['tm'][m_idx]['a_eff'][i] = m_data['a_eff']
+        if len(sp_res['te_modes']) > 0:
+            m0 = sp_res['te_modes'][0]
+            res['neff_te'][i] = m0['neff']
+            res['gamma_core_te'][i] = m0['gamma_core']
+            res['gamma_air_te'][i] = m0['gamma_air']
+            res['a_eff_te'][i] = m0['a_eff']
+            
+        if len(sp_res['tm_modes']) > 0:
+            m0 = sp_res['tm_modes'][0]
+            res['neff_tm'][i] = m0['neff']
+            res['gamma_core_tm'][i] = m0['gamma_core']
+            res['gamma_air_tm'][i] = m0['gamma_air']
+            res['a_eff_tm'][i] = m0['a_eff']
 
     # Dispersion & ng calculation for Wavelength sweep
     if param_name == "Wavelength" and n_pts >= 3:
         dlam = (param_vec[-1] - param_vec[0]) / (n_pts - 1)
         c_speed = 299792458.0
         
-        for pol_key in ['te', 'tm']:
-            if pol_choice == "TE" and pol_key == "tm": continue
-            if pol_choice == "TM" and pol_key == "te": continue
+        if pol_choice in ["TE", "Both (TE & TM)"] and not np.all(np.isnan(res['neff_te'])):
+            dneff = np.gradient(res['neff_te'], dlam)
+            d2neff = np.gradient(dneff, dlam)
+            res['ng_te'] = res['neff_te'] - param_vec * dneff
+            res['D_te'] = -(param_vec * 1e-6 / c_speed) * (d2neff * 1e12) * 1e-3
             
-            for m_idx in range(max_modes):
-                neff_arr = res[pol_key][m_idx]['neff']
-                if not np.all(np.isnan(neff_arr)):
-                    valid_mask = ~np.isnan(neff_arr)
-                    if np.sum(valid_mask) >= 3:
-                        dneff = np.gradient(neff_arr[valid_mask], dlam)
-                        d2neff = np.gradient(dneff, dlam)
-                        
-                        ng_arr = np.full(n_pts, np.nan)
-                        d_arr = np.full(n_pts, np.nan)
-                        
-                        ng_arr[valid_mask] = neff_arr[valid_mask] - param_vec[valid_mask] * dneff
-                        d_arr[valid_mask] = -(param_vec[valid_mask] * 1e-6 / c_speed) * (d2neff * 1e12) * 1e-3
-                        
-                        res[pol_key][m_idx]['ng'] = ng_arr
-                        res[pol_key][m_idx]['D'] = d_arr
+        if pol_choice in ["TM", "Both (TE & TM)"] and not np.all(np.isnan(res['neff_tm'])):
+            dneff = np.gradient(res['neff_tm'], dlam)
+            d2neff = np.gradient(dneff, dlam)
+            res['ng_tm'] = res['neff_tm'] - param_vec * dneff
+            res['D_tm'] = -(param_vec * 1e-6 / c_speed) * (d2neff * 1e12) * 1e-3
 
     return res
 
+# --- FAST 2D SWEEP (FUNDAMENTAL MODE ONLY) ---
 def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, res_mode, core_material, pol_choice="Both (TE & TM)", progress_callback=None):
     n1, n2 = len(vec1), len(vec2)
     total_sims = n1 * n2
@@ -292,13 +308,14 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             p_dict[param1_name] = val1
             p_dict[param2_name] = val2
             
+            # Fast execution: search_higher_modes = False
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
-                p_dict['Wavelength'], res_mode, core_material, pol_choice
+                p_dict['Wavelength'], res_mode, core_material, pol_choice,
+                search_higher_modes=False
             )
             
-            # Save 3 sample points (Min, Mid, Max on diagonal/center)
             if (j == 0 and i == 0):
                 res['sample_points']['Min'] = {'p1': val1, 'p2': val2, 'res': sp_res}
             elif (j == mid_j and i == mid_i):
