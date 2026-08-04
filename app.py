@@ -5,6 +5,7 @@ import pandas as pd
 import io
 import time
 import os
+import base64
 import streamlit.components.v1 as components
 from mode_engine import run_single_point, run_1d_sweep, run_2d_universal_sweep
 
@@ -215,11 +216,9 @@ if analysis_type == "Single Point Analysis":
             n_mesh = np.sqrt(r['eps_mesh'])
             im_n = ax_idx_prof.imshow(n_mesh.T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='viridis', aspect='auto')
             ax_idx_prof.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
-            ax_idx_prof.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
             fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Refractive Index (n)')
             ax_idx_prof.set_xlabel('Horizontal Position X [μm]')
             ax_idx_prof.set_ylabel('Vertical Position Y [μm]')
-            ax_idx_prof.legend(loc='upper right')
             st.pyplot(fig_idx_prof)
             figs_for_pdf["Refractive Index Distribution n(x,y)"] = fig_idx_prof
         tab_idx += 1
