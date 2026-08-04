@@ -41,7 +41,7 @@ def inject_google_analytics(measurement_id):
 inject_google_analytics("G-7776KX662W")
 
 st.title("⚡ Universal Waveguide Core & Air Confinement Solver")
-st.markdown("### Integrated Optics Multi-Mode Solver with Refractive Index Profile & PDF Export")
+st.markdown("### Integrated Optics Multi-Mode Solver with Individual Image Exports & PDF Reports")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
@@ -70,7 +70,19 @@ def fig_to_bytes(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
     buf.seek(0)
-    return buf
+    return buf.getvalue()
+
+# --- HELPER FUNCTION: RENDER FIG WITH INDIVIDUAL DOWNLOAD BUTTON ---
+def display_fig_with_download(fig, filename, key_unique):
+    st.pyplot(fig)
+    img_bytes = fig_to_bytes(fig)
+    st.download_button(
+        label="💾 Download Image (PNG)",
+        data=img_bytes,
+        file_name=filename,
+        mime="image/png",
+        key=key_unique
+    )
 
 # --- HELPER FUNCTION: GENERATE PDF REPORT ---
 def create_pdf_report(title, summary_dict, figs_dict):
@@ -118,7 +130,7 @@ def create_pdf_report(title, summary_dict, figs_dict):
     for fig_name, fig_obj in figs_dict.items():
         if fig_obj is not None:
             story.append(Paragraph(f"<b>{fig_name}</b>", body_style))
-            img_buf = fig_to_bytes(fig_obj)
+            img_buf = io.BytesIO(fig_to_bytes(fig_obj))
             story.append(RLImage(img_buf, width=480, height=270))
             story.append(Spacer(1, 10))
             
@@ -126,17 +138,34 @@ def create_pdf_report(title, summary_dict, figs_dict):
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()
 
-# --- HELPER FUNCTION FOR 3 SAMPLE FIELDS DISPLAY ---
-def render_sample_3_fields(sample_points_dict):
+# --- HELPER FUNCTION FOR INDEX PROFILE + 3 SAMPLE FIELDS DISPLAY ---
+def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
+    tags = ["Min", "Mid", "Max"]
+    
+    # 1. First show Index Profile of Mid point
+    if "Mid" in sample_points_dict:
+        mid_sp = sample_points_dict["Mid"]["res"]
+        st.markdown("#### 📐 Cross-Sectional Refractive Index Distribution $n(x,y)$")
+        fig_n, ax_n = plt.subplots(figsize=(7, 3.8))
+        n_mesh = np.sqrt(mid_sp['eps_mesh'])
+        im_n = ax_n.imshow(n_mesh.T, origin='lower', extent=[mid_sp['xc'][0], mid_sp['xc'][-1], mid_sp['yc'][0], mid_sp['yc'][-1]], cmap='viridis', aspect='auto')
+        ax_n.plot([mid_sp['x_min'], mid_sp['x_max'], mid_sp['x_max'], mid_sp['x_min'], mid_sp['x_min']], [mid_sp['y_min'], mid_sp['y_min'], mid_sp['y_max'], mid_sp['y_max'], mid_sp['y_min']], 'w--', lw=1.5)
+        fig_n.colorbar(im_n, ax=ax_n, label='Refractive Index (n)')
+        ax_n.set_xlabel('Horizontal Position X [μm]')
+        ax_n.set_ylabel('Vertical Position Y [μm]')
+        display_fig_with_download(fig_n, "refractive_index_profile.png", f"{prefix_key}_n_prof")
+        st.markdown("---")
+
+    # 2. Show 3 Sample Fields Side-by-Side
+    st.markdown("#### 🖼️ Representative Mode Profiles Across Scan Range (Min / Mid / Max)")
     col_a, col_b, col_c = st.columns(3)
     cols = [col_a, col_b, col_c]
-    tags = ["Min", "Mid", "Max"]
     
     for idx, tag in enumerate(tags):
         if tag in sample_points_dict:
             s_data = sample_points_dict[tag]
             with cols[idx]:
-                st.markdown(f"#### 📍 {tag} Sample Point")
+                st.markdown(f"##### 📍 {tag} Sample Point")
                 if 'val' in s_data: 
                     st.caption(f"Parameter Value: **{s_data['val']:.3f}**")
                 elif 'p1' in s_data: 
@@ -152,7 +181,7 @@ def render_sample_3_fields(sample_points_dict):
                     ax.axhline(sp_r['interface_y'], color='r', linestyle='--', lw=1.2, label='Air Boundary')
                     fig.colorbar(im, ax=ax)
                     ax.set_title(f"TE0 Field (n_eff={m0['neff']:.4f})")
-                    st.pyplot(fig)
+                    display_fig_with_download(fig, f"TE0_field_{tag}.png", f"{prefix_key}_te0_{tag}")
                 
                 if len(sp_r['tm_modes']) > 0:
                     m0 = sp_r['tm_modes'][0]
@@ -162,7 +191,7 @@ def render_sample_3_fields(sample_points_dict):
                     ax.axhline(sp_r['interface_y'], color='r', linestyle='--', lw=1.2, label='Air Boundary')
                     fig.colorbar(im, ax=ax)
                     ax.set_title(f"TM0 Field (n_eff={m0['neff']:.4f})")
-                    st.pyplot(fig)
+                    display_fig_with_download(fig, f"TM0_field_{tag}.png", f"{prefix_key}_tm0_{tag}")
 
 # ==============================================================================
 # --- MODE 1: SINGLE POINT ANALYSIS ---
@@ -219,7 +248,7 @@ if analysis_type == "Single Point Analysis":
             fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Refractive Index (n)')
             ax_idx_prof.set_xlabel('Horizontal Position X [μm]')
             ax_idx_prof.set_ylabel('Vertical Position Y [μm]')
-            st.pyplot(fig_idx_prof)
+            display_fig_with_download(fig_idx_prof, f"refractive_index_profile_{core_material}.png", "sp_n_prof")
             figs_for_pdf["Refractive Index Distribution n(x,y)"] = fig_idx_prof
         tab_idx += 1
         
@@ -244,7 +273,7 @@ if analysis_type == "Single Point Analysis":
                     ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
                     ax_m.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
                     fig_m.colorbar(im_m, ax=ax_m, label='Field (Ex)')
-                    st.pyplot(fig_m)
+                    display_fig_with_download(fig_m, f"TE{m['mode_num']}_field_profile.png", f"sp_te_{m['mode_num']}")
                     figs_for_pdf[f"TE{m['mode_num']} 2D Field Profile"] = fig_m
             tab_idx += 1
             
@@ -269,7 +298,7 @@ if analysis_type == "Single Point Analysis":
                     ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
                     ax_m.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
                     fig_m.colorbar(im_m, ax=ax_m, label='Field (Ey)')
-                    st.pyplot(fig_m)
+                    display_fig_with_download(fig_m, f"TM{m['mode_num']}_field_profile.png", f"sp_tm_{m['mode_num']}")
                     figs_for_pdf[f"TM{m['mode_num']} 2D Field Profile"] = fig_m
             tab_idx += 1
 
@@ -285,7 +314,7 @@ if analysis_type == "Single Point Analysis":
                 ax_cx.grid(True); ax_cx.legend()
                 ax_cx.set_xlabel('Horizontal Position X [μm]'); ax_cx.set_ylabel('Normalized Field Intensity')
                 ax_cx.set_title("Horizontal Cutline (y = y_center)")
-                st.pyplot(fig_cx)
+                display_fig_with_download(fig_cx, "horizontal_cutline_1d.png", "sp_cut_x")
                 figs_for_pdf["1D Horizontal Cutline"] = fig_cx
 
             with col_cy:
@@ -295,7 +324,7 @@ if analysis_type == "Single Point Analysis":
                 ax_cy.grid(True); ax_cy.legend()
                 ax_cy.set_xlabel('Vertical Position Y [μm]'); ax_cy.set_ylabel('Normalized Field Intensity')
                 ax_cy.set_title("Vertical Cutline (x = 0)")
-                st.pyplot(fig_cy)
+                display_fig_with_download(fig_cy, "vertical_cutline_1d.png", "sp_cut_y")
                 figs_for_pdf["1D Vertical Cutline"] = fig_cy
         tab_idx += 1
 
@@ -310,7 +339,7 @@ if analysis_type == "Single Point Analysis":
 
         # EXPORT SECTION
         st.markdown("---")
-        st.subheader("📥 Export Results & Reports")
+        st.subheader("📥 Export Complete Reports")
         c_exp1, c_exp2 = st.columns(2)
         
         summary_info = {
@@ -397,24 +426,28 @@ elif analysis_type == "1D Parametric Sweep":
         figs_for_pdf_1d = {}
 
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "📐 Geometry & Sample Profiles",
             "📈 Effective Index (n_eff)",
             "🔍 Material vs. Modal Index",
             "🎯 Confinement Factor (Γ)",
-            "🖼️ Sample Field Profiles (Min/Mid/Max)",
             "⚡ Group Index (n_g)",
             "🌊 Dispersion (D)",
             "📐 Effective Area (A_eff)"
         ])
 
+        # TAB 1: Index Profile & 3 Sample Fields
         with tab1:
+            render_index_and_3_sample_fields(s1['sample_points'], prefix_key="1d_tab1")
+
+        with tab2:
             fig_n, ax_n = plt.subplots(figsize=(7, 4))
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_n.plot(s1['param_vec'], s1['neff_te'], 'bo-', lw=2, label='Quasi-TE0')
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_n.plot(s1['param_vec'], s1['neff_tm'], 'rs-', lw=2, label='Quasi-TM0')
             ax_n.grid(True); ax_n.legend(); ax_n.set_xlabel(s1['param_name']); ax_n.set_ylabel('Effective Index (n_eff)')
-            st.pyplot(fig_n)
+            display_fig_with_download(fig_n, f"1D_neff_vs_{axis_1d}.png", "1d_neff_fig")
             figs_for_pdf_1d["Effective Index Dispersion"] = fig_n
 
-        with tab2:
+        with tab3:
             fig_mat, ax_mat = plt.subplots(figsize=(7, 4))
             ax_mat.plot(s1['param_vec'], s1['n_core_vec'], 'k--', lw=2, label=f'n_core ({core_material})')
             ax_mat.plot(s1['param_vec'], s1['n_clad_vec'], 'g--', lw=2, label='n_clad (SiO2)')
@@ -422,10 +455,10 @@ elif analysis_type == "1D Parametric Sweep":
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_mat.plot(s1['param_vec'], s1['neff_tm'], 'rs-', lw=2, label='n_eff (TM0)')
             ax_mat.grid(True); ax_mat.legend(); ax_mat.set_xlabel(s1['param_name']); ax_mat.set_ylabel('Refractive Index (n)')
             ax_mat.set_title(f"Modal Dispersion n_eff vs. Material Indices ({core_material} & SiO2)")
-            st.pyplot(fig_mat)
+            display_fig_with_download(fig_mat, f"1D_material_vs_neff_{axis_1d}.png", "1d_mat_fig")
             figs_for_pdf_1d["Material vs Modal Index Comparison"] = fig_mat
 
-        with tab3:
+        with tab4:
             fig_c, ax_c = plt.subplots(figsize=(7, 4))
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
                 ax_c.plot(s1['param_vec'], s1['gamma_core_te'], 'b-o', lw=2, label='Γ_Core (TE0)')
@@ -434,11 +467,8 @@ elif analysis_type == "1D Parametric Sweep":
                 ax_c.plot(s1['param_vec'], s1['gamma_core_tm'], 'r-s', lw=2, label='Γ_Core (TM0)')
                 ax_c.plot(s1['param_vec'], s1['gamma_air_tm'], 'r--v', lw=1.5, label='Γ_Air (TM0)')
             ax_c.grid(True); ax_c.legend(); ax_c.set_xlabel(s1['param_name']); ax_c.set_ylabel('Confinement Factor [%]')
-            st.pyplot(fig_c)
+            display_fig_with_download(fig_c, f"1D_confinement_vs_{axis_1d}.png", "1d_conf_fig")
             figs_for_pdf_1d["Confinement Factors"] = fig_c
-
-        with tab4:
-            render_sample_3_fields(s1['sample_points'])
 
         with tab5:
             if 'ng_te' in s1 or 'ng_tm' in s1:
@@ -446,7 +476,7 @@ elif analysis_type == "1D Parametric Sweep":
                 if 'ng_te' in s1: ax_ng.plot(s1['param_vec'], s1['ng_te'], 'bo-', lw=2, label='n_g (TE0)')
                 if 'ng_tm' in s1: ax_ng.plot(s1['param_vec'], s1['ng_tm'], 'rs-', lw=2, label='n_g (TM0)')
                 ax_ng.grid(True); ax_ng.legend(); ax_ng.set_xlabel(s1['param_name']); ax_ng.set_ylabel('Group Index (n_g)')
-                st.pyplot(fig_ng)
+                display_fig_with_download(fig_ng, f"1D_ng_vs_{axis_1d}.png", "1d_ng_fig")
                 figs_for_pdf_1d["Group Index (ng)"] = fig_ng
             else: st.info("Group Index n_g is calculated when scanning Wavelength.")
 
@@ -456,7 +486,7 @@ elif analysis_type == "1D Parametric Sweep":
                 if 'D_te' in s1: ax_d.plot(s1['param_vec'], s1['D_te'], 'bo-', lw=2, label='Dispersion D (TE0)')
                 if 'D_tm' in s1: ax_d.plot(s1['param_vec'], s1['D_tm'], 'rs-', lw=2, label='Dispersion D (TM0)')
                 ax_d.grid(True); ax_d.legend(); ax_d.set_xlabel(s1['param_name']); ax_d.set_ylabel('D [ps/(nm·km)]')
-                st.pyplot(fig_d)
+                display_fig_with_download(fig_d, f"1D_dispersion_D_vs_{axis_1d}.png", "1d_disp_fig")
                 figs_for_pdf_1d["Chromatic Dispersion (D)"] = fig_d
             else: st.info("Dispersion D is calculated when scanning Wavelength.")
 
@@ -465,12 +495,12 @@ elif analysis_type == "1D Parametric Sweep":
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_a.plot(s1['param_vec'], s1['a_eff_te'], 'bo-', lw=2, label='A_eff (TE0)')
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_a.plot(s1['param_vec'], s1['a_eff_tm'], 'rs-', lw=2, label='A_eff (TM0)')
             ax_a.grid(True); ax_a.legend(); ax_a.set_xlabel(s1['param_name']); ax_a.set_ylabel('Effective Area A_eff [μm²]')
-            st.pyplot(fig_a)
+            display_fig_with_download(fig_a, f"1D_aeff_vs_{axis_1d}.png", "1d_aeff_fig")
             figs_for_pdf_1d["Effective Mode Area"] = fig_a
 
         # EXPORT SECTION 1D
         st.markdown("---")
-        st.subheader("📥 Export Results & Reports")
+        st.subheader("📥 Export Complete Reports")
         c1d_exp1, c1d_exp2 = st.columns(2)
         
         sum_1d = {
@@ -561,19 +591,23 @@ else:
         figs_for_pdf_2d = {}
 
         tab2d_1, tab2d_2, tab2d_3 = st.tabs([
+            "📐 Geometry & Sample Profiles",
             "🗺️ Core Confinement Maps (Γ_Core)",
-            "🗺️ Air Cladding Confinement Maps (Γ_Air)",
-            "🖼️ Sample Field Profiles (Min/Mid/Max)"
+            "🗺️ Air Cladding Confinement Maps (Γ_Air)"
         ])
 
+        # TAB 1: Index Profile & 3 Sample Fields
         with tab2d_1:
+            render_index_and_3_sample_fields(sr['sample_points'], prefix_key="2d_tab1")
+
+        with tab2d_2:
             col_m1, col_m2 = st.columns(2)
             if sr['pol_choice'] in ["TE", "Both (TE & TM)"]:
                 fig_c1, ax_c1 = plt.subplots(figsize=(6, 4))
                 cp1 = ax_c1.contourf(sr['vec1'], sr['vec2'], sr['gamma_core_te'], levels=10, cmap='jet')
                 fig_c1.colorbar(cp1, ax=ax_c1, label='Core Confinement TE [%]')
                 ax_c1.set_xlabel(sr['param1_name']); ax_c1.set_ylabel(sr['param2_name']); ax_c1.set_title("TE0 Core Confinement Γ_Core (%)")
-                col_m1.pyplot(fig_c1)
+                display_fig_with_download(fig_c1, f"2D_TE0_Core_Confinement_{axis_x}_vs_{axis_y}.png", "2d_conf_te_fig")
                 figs_for_pdf_2d["TE0 Core Confinement Contour"] = fig_c1
 
             if sr['pol_choice'] in ["TM", "Both (TE & TM)"]:
@@ -581,17 +615,17 @@ else:
                 cp2 = ax_c2.contourf(sr['vec1'], sr['vec2'], sr['gamma_core_tm'], levels=10, cmap='jet')
                 fig_c2.colorbar(cp2, ax=ax_c2, label='Core Confinement TM [%]')
                 ax_c2.set_xlabel(sr['param1_name']); ax_c2.set_ylabel(sr['param2_name']); ax_c2.set_title("TM0 Core Confinement Γ_Core (%)")
-                col_m2.pyplot(fig_c2)
+                display_fig_with_download(fig_c2, f"2D_TM0_Core_Confinement_{axis_x}_vs_{axis_y}.png", "2d_conf_tm_fig")
                 figs_for_pdf_2d["TM0 Core Confinement Contour"] = fig_c2
 
-        with tab2d_2:
+        with tab2d_3:
             col_a1, col_a2 = st.columns(2)
             if sr['pol_choice'] in ["TE", "Both (TE & TM)"]:
                 fig_a1, ax_a1 = plt.subplots(figsize=(6, 4))
                 cp_a1 = ax_a1.contourf(sr['vec1'], sr['vec2'], sr['gamma_air_te'], levels=10, cmap='jet')
                 fig_a1.colorbar(cp_a1, ax=ax_a1, label='Air Confinement TE [%]')
                 ax_a1.set_xlabel(sr['param1_name']); ax_a1.set_ylabel(sr['param2_name']); ax_a1.set_title("TE0 Air Confinement Γ_Air (%)")
-                col_a1.pyplot(fig_a1)
+                display_fig_with_download(fig_a1, f"2D_TE0_Air_Confinement_{axis_x}_vs_{axis_y}.png", "2d_air_te_fig")
                 figs_for_pdf_2d["TE0 Air Confinement Contour"] = fig_a1
 
             if sr['pol_choice'] in ["TM", "Both (TE & TM)"]:
@@ -599,15 +633,12 @@ else:
                 cp_a2 = ax_a2.contourf(sr['vec1'], sr['vec2'], sr['gamma_air_tm'], levels=10, cmap='jet')
                 fig_a2.colorbar(cp_a2, ax=ax_a2, label='Air Confinement TM [%]')
                 ax_a2.set_xlabel(sr['param1_name']); ax_a2.set_ylabel(sr['param2_name']); ax_a2.set_title("TM0 Air Confinement Γ_Air (%)")
-                col_a2.pyplot(fig_a2)
+                display_fig_with_download(fig_a2, f"2D_TM0_Air_Confinement_{axis_x}_vs_{axis_y}.png", "2d_air_tm_fig")
                 figs_for_pdf_2d["TM0 Air Confinement Contour"] = fig_a2
-
-        with tab2d_3:
-            render_sample_3_fields(sr['sample_points'])
 
         # EXPORT SECTION 2D
         st.markdown("---")
-        st.subheader("📥 Export Results & Reports")
+        st.subheader("📥 Export Complete Reports")
         c2d_exp1, c2d_exp2 = st.columns(2)
         
         sum_2d = {
