@@ -225,6 +225,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         'param_name': param_name, 'param_vec': param_vec, 'pol_choice': pol_choice,
         'sample_points': {},
         'neff_te': np.full(n_pts, np.nan), 'neff_tm': np.full(n_pts, np.nan),
+        'n_core_vec': np.full(n_pts, np.nan), 'n_clad_vec': np.full(n_pts, np.nan),
         'gamma_core_te': np.full(n_pts, np.nan), 'gamma_core_tm': np.full(n_pts, np.nan),
         'gamma_air_te': np.full(n_pts, np.nan), 'gamma_air_tm': np.full(n_pts, np.nan),
         'a_eff_te': np.full(n_pts, np.nan), 'a_eff_tm': np.full(n_pts, np.nan)
@@ -237,11 +238,14 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         p_dict = fixed_params.copy()
         p_dict[param_name] = val
         
-        # Fast execution: search_higher_modes = False
+        lam_curr = p_dict['Wavelength']
+        res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
+        res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
+        
         sp_res = run_single_point(
             p_dict['Waveguide Width'], p_dict['Waveguide Height'],
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
-            p_dict['Wavelength'], res_mode, core_material, pol_choice,
+            lam_curr, res_mode, core_material, pol_choice,
             search_higher_modes=False
         )
         
@@ -263,7 +267,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             res['gamma_air_tm'][i] = m0['gamma_air']
             res['a_eff_tm'][i] = m0['a_eff']
 
-    # Dispersion & ng calculation for Wavelength sweep
+    # Group index (ng) & Dispersion (D) calculation for Wavelength sweep
     if param_name == "Wavelength" and n_pts >= 3:
         dlam = (param_vec[-1] - param_vec[0]) / (n_pts - 1)
         c_speed = 299792458.0
@@ -308,7 +312,6 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             p_dict[param1_name] = val1
             p_dict[param2_name] = val2
             
-            # Fast execution: search_higher_modes = False
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
