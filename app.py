@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: app.py
-# Version: v2.2.0 (Advanced Edition - Rib Waveguide & Bending Support)
+# Version: v2.2.1 (Advanced Edition - Syntax Fixed)
 # Date: August 2026
-# Description: Added Rib Waveguide parameters (Slab height/width), trapezoidal sidewalls, and bending loss convergence.
+# Description: Fixed string escapes in LaTeX formulas and Streamlit components.
 # ==============================================================================
 
 import streamlit as st
@@ -102,11 +102,9 @@ def draw_core_outline(ax, sp_r):
     
     if wg_type == "Rib" and h_slab > 0:
         y_slab_top = y_min + h_slab
-        # Outline for Rib + Slab
         x_coords = [-w_slab/2, w_slab/2, w_slab/2, w_bot/2, w_top/2, -w_top/2, -w_bot/2, -w_slab/2, -w_slab/2]
         y_coords = [y_min, y_min, y_slab_top, y_slab_top, y_max, y_max, y_slab_top, y_slab_top, y_min]
     else:
-        # Standard Strip Outline
         x_coords = [-w_bot / 2.0, w_bot / 2.0, w_top / 2.0, -w_top / 2.0, -w_bot / 2.0]
         y_coords = [y_min, y_min, y_max, y_max, y_min]
         
@@ -173,7 +171,7 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
     
     if "Mid" in sample_points_dict:
         mid_sp = sample_points_dict["Mid"]["res"]
-        st.markdown("#### 📐 Cross-Sectional Refractive Index Distribution $n(x,y)$")
+        st.markdown(r"#### 📐 Cross-Sectional Refractive Index Distribution $n(x,y)$")
         fig_n, ax_n = plt.subplots(figsize=(7, 3.8))
         n_mesh = np.sqrt(mid_sp['eps_mesh'])
         im_n = ax_n.imshow(n_mesh.T, origin='lower', extent=[mid_sp['xc'][0], mid_sp['xc'][-1], mid_sp['yc'][0], mid_sp['yc'][-1]], cmap='viridis', aspect='auto')
@@ -274,11 +272,11 @@ if analysis_type == "Single Point Analysis":
             m0_te = r['te_modes'][0] if len(r['te_modes']) > 0 else None
             if m0_te:
                 b_info = m0_te['bend_info']
-                st.markdown(f"""
+                st.markdown(rf"""
                 ### 🌀 Bending Loss & Convergence Analysis (TE0 Mode)
                 * **Method 1 (Caustic Tail Integration Loss):** `{b_info['loss_m1']:.3f} dB/cm`
                 * **Method 3 (Marcuse Analytical Formula Loss):** `{b_info['loss_m3']:.3f} dB/cm`
-                * **Minimal Recommended Radius ($R_{{\\text{{min}}}}$):** `{b_info['r_min_um']:.2f} μm`
+                * **Minimal Recommended Radius ($R_{{\text{{min}}}}$):** `{b_info['r_min_um']:.2f} μm`
                 * **Caustic Radiation Boundary ($x_{{\\text{{rad}}}}$):** `{b_info['x_rad_um']:.2f} μm`
                 """)
                 if b_info['converged']:
@@ -288,7 +286,7 @@ if analysis_type == "Single Point Analysis":
 
         st.markdown("---")
         
-        tab_list = ["📐 Refractive Index Profile n(x,y)"]
+        tab_list = [r"📐 Refractive Index Profile n(x,y)"]
         if len(r['te_modes']) > 0:
             for m in r['te_modes']: tab_list.append(f"TE{m['mode_num']} Mode")
         if len(r['tm_modes']) > 0:
@@ -322,7 +320,7 @@ if analysis_type == "Single Point Analysis":
                 col_info, col_img = st.columns([1, 2])
                 with col_info:
                     b = m['bend_info']
-                    st.markdown(f"""
+                    st.markdown(rf"""
                     * **Effective Index ($n_{{\\text{{eff}}}}$):** `{m['neff']:.5f}`
                     * **Core Confinement ($\Gamma_{{\\text{{Core}}}}$):** `{m['gamma_core']:.2f}%`
                     * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** `{m['gamma_air']:.2f}%`
@@ -338,7 +336,7 @@ if analysis_type == "Single Point Analysis":
                     draw_core_outline(ax_m, r)
                     ax_m.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
                     if b['x_rad_um'] > 0:
-                        ax_m.axvline(b['x_rad_um'], color='m', linestyle=':', lw=1.5, label=f'Caustic x_rad ({b["x_rad_um"]:.2f}μm)')
+                        ax_m.axvline(b['x_rad_um'], color='m', linestyle=':', lw=1.5, label=f"Caustic x_rad ({b['x_rad_um']:.2f}μm)")
                     ax_m.legend(loc='upper right')
                     fig_m.colorbar(im_m, ax=ax_m, label='Field (Ex)')
                     display_fig_with_download(fig_m, f"TE{m['mode_num']}_field_profile.png", f"sp_te_{m['mode_num']}")
@@ -352,7 +350,7 @@ if analysis_type == "Single Point Analysis":
                 col_info, col_img = st.columns([1, 2])
                 with col_info:
                     b = m['bend_info']
-                    st.markdown(f"""
+                    st.markdown(rf"""
                     * **Effective Index ($n_{{\\text{{eff}}}}$):** `{m['neff']:.5f}`
                     * **Core Confinement ($\Gamma_{{\\text{{Core}}}}$):** `{m['gamma_core']:.2f}%`
                     * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** `{m['gamma_air']:.2f}%`
@@ -368,7 +366,7 @@ if analysis_type == "Single Point Analysis":
                     draw_core_outline(ax_m, r)
                     ax_m.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
                     if b['x_rad_um'] > 0:
-                        ax_m.axvline(b['x_rad_um'], color='m', linestyle=':', lw=1.5, label=f'Caustic x_rad ({b["x_rad_um"]:.2f}μm)')
+                        ax_m.axvline(b['x_rad_um'], color='m', linestyle=':', lw=1.5, label=f"Caustic x_rad ({b['x_rad_um']:.2f}μm)")
                     ax_m.legend(loc='upper right')
                     fig_m.colorbar(im_m, ax=ax_m, label='Field (Ey)')
                     display_fig_with_download(fig_m, f"TM{m['mode_num']}_field_profile.png", f"sp_tm_{m['mode_num']}")
@@ -404,14 +402,14 @@ if analysis_type == "Single Point Analysis":
 
         # Equations & Definitions
         with tabs[tab_idx]:
-            st.markdown("""
+            st.markdown(r"""
             ### 📖 Mathematical Equations & Physical Definitions
-            * **Effective Index:** $n_{\\text{clad}} < n_{\\text{eff}} < n_{\\text{core}}$
-            * **Conformal Mapping Index Transformation:** $n_{\\text{bend}}(x, y) = n(x, y) \\cdot \\left(1 + \\frac{x}{R}\\right)$
+            * **Effective Index:** $n_{\text{clad}} < n_{\text{eff}} < n_{\text{core}}$
+            * **Conformal Mapping Index Transformation:** $n_{\text{bend}}(x, y) = n(x, y) \cdot \left(1 + \frac{x}{R}\right)$
             * **Method 1 (Caustic Tail Loss Integration):**
-              $$\\text{Power Ratio} = \\frac{\\iint_{x \\ge x_{\\text{rad}}} |E|^2 dx dy}{\\iint |E|^2 dx dy}, \\quad x_{\\text{rad}} = R \\cdot \\left(\\frac{n_{\\text{eff}}}{n_{\\text{clad}}} - 1\\right)$$
+              $$\text{Power Ratio} = \frac{\iint_{x \ge x_{\text{rad}}} |E|^2 dx dy}{\iint |E|^2 dx dy}, \quad x_{\text{rad}} = R \cdot \left(\frac{n_{\text{eff}}}{n_{\text{clad}}} - 1\right)$$
             * **Method 3 (Marcuse Analytical Bending Loss & Minimum Radius):**
-              $$R_{\\text{min}} = \\frac{3 \\lambda}{4\\pi (n_{\\text{eff}}^2 - n_{\\text{clad}}^2)^{3/2}}, \\quad \\alpha \\propto \\exp\\left(-\\frac{2}{3} k_0 R \\frac{\\Delta n^{3/2}}{n_{\\text{eff}}^2}\\right)$$
+              $$R_{\text{min}} = \frac{3 \lambda}{4\pi (n_{\text{eff}}^2 - n_{\text{clad}}^2)^{3/2}}, \quad \alpha \propto \exp\left(-\frac{2}{3} k_0 R \frac{\Delta n^{3/2}}{n_{\text{eff}}^2}\right)$$
             """)
 
         # EXPORT SECTION
