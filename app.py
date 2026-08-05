@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: app.py
-# Version: v2.3.0 (Advanced Edition - Metal Heater Support)
+# Version: v2.4.1 (Advanced Edition - Fixed TypeError & Metal Gap)
 # Date: August 2026
-# Description: Added Metal Heater parameters (Metal Type, Thickness, Width, Offset) and absorption loss analysis.
+# Description: Fixed TypeError when m0_te or m0_tm is None. Implemented Metal Gap parameter.
 # ==============================================================================
 
 import streamlit as st
@@ -115,7 +115,10 @@ def draw_core_outline(ax, sp_r):
         m_thick = sp_r.get('metal_thick_um', 0.10)
         m_width = sp_r.get('metal_width_um', 2.0)
         m_offset = sp_r.get('metal_offset_um', 0.0)
-        y_m_min = sp_r['interface_y']
+        m_gap = sp_r.get('metal_gap_um', 1.0)
+        
+        y_core_top = y_max
+        y_m_min = y_core_top + m_gap
         y_m_max = y_m_min + m_thick
         x_m_min = m_offset - m_width / 2.0
         x_m_max = m_offset + m_width / 2.0
@@ -255,7 +258,7 @@ if analysis_type == "Single Point Analysis":
     h_core = st.sidebar.number_input("Waveguide Height [μm]", value=0.4, step=0.05)
     sidewall_angle = st.sidebar.slider("Sidewall Angle [deg]", min_value=30.0, max_value=90.0, value=90.0, step=1.0)
     lam_um = st.sidebar.number_input("Wavelength [μm]", value=1.55, step=0.01)
-    top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=1.0, step=0.1, help="Cladding gap between Core and Metal Heater.")
+    top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=2.0, step=0.2)
     bottom_ox = st.sidebar.number_input("Oxide Bottom Thickness (BOX) [μm]", value=4.0, step=0.5)
 
     # --- METAL HEATER OPTIONS ---
@@ -266,9 +269,11 @@ if analysis_type == "Single Point Analysis":
     metal_thick_val = 0.10
     metal_width_val = 2.0
     metal_offset_val = 0.0
+    metal_gap_val = 1.0
     
     if include_metal_val:
         metal_type_val = st.sidebar.selectbox("Metal Type", options=["Al (Aluminum)", "Au (Gold)", "Pt (Platinum)"], index=0)
+        metal_gap_val = st.sidebar.number_input("Heater Gap (Core Top to Heater Bottom) [μm]", value=1.00, step=0.1, help="Vertical Oxide separation gap between WG core top and metal bottom.")
         c_m1, c_m2 = st.sidebar.columns(2)
         metal_thick_val = c_m1.number_input("Heater Thickness [μm]", value=0.10, step=0.01)
         metal_width_val = c_m2.number_input("Heater Width [μm]", value=2.00, step=0.2)
@@ -287,7 +292,7 @@ if analysis_type == "Single Point Analysis":
                     search_higher_modes, sidewall_angle, ring_radius_val,
                     wg_type=wg_profile_type, h_slab=h_slab_val, w_slab=w_slab_val,
                     include_metal=include_metal_val, metal_type=metal_type_val,
-                    metal_thick_um=metal_thick_val, metal_width_um=metal_width_val, metal_offset_um=metal_offset_val
+                    metal_thick_um=metal_thick_val, metal_width_um=metal_width_val, metal_offset_um=metal_offset_val, metal_gap_um=metal_gap_val
                 )
                 st.session_state['sp_results'] = res
 
@@ -302,10 +307,14 @@ if analysis_type == "Single Point Analysis":
         if r.get('include_metal', False):
             m0_te = r['te_modes'][0] if len(r['te_modes']) > 0 else None
             m0_tm = r['tm_modes'][0] if len(r['tm_modes']) > 0 else None
+            
+            te_loss_str = f"{m0_te['metal_loss_db_cm']:.3f} dB/cm" if m0_te is not None else "N/A"
+            tm_loss_str = f"{m0_tm['metal_loss_db_cm']:.3f} dB/cm" if m0_tm is not None else "N/A"
+            
             st.info(f"""
-            🔥 **Metal Heater Active ({r['metal_type']}):** Width = `{r['metal_width_um']} μm`, Thickness = `{r['metal_thick_um']} μm`, Offset = `{r['metal_offset_um']} μm`. <br/>
-            * **TE0 Metal Absorption Loss:** `{m0_te['metal_loss_db_cm']:.3f} dB/cm` if TE0 exists. <br/>
-            * **TM0 Metal Absorption Loss:** `{m0_tm['metal_loss_db_cm']:.3f} dB/cm` if TM0 exists.
+            🔥 **Metal Heater Active ({r['metal_type']}):** Gap = `{r['metal_gap_um']} μm`, Width = `{r['metal_width_um']} μm`, Thickness = `{r['metal_thick_um']} μm`, Offset = `{r['metal_offset_um']} μm`. <br/>
+            * **TE0 Metal Absorption Loss:** `{te_loss_str}` <br/>
+            * **TM0 Metal Absorption Loss:** `{tm_loss_str}`
             """, icon="🔥")
 
         st.markdown("---")
@@ -430,8 +439,8 @@ if analysis_type == "Single Point Analysis":
             ### 📖 Mathematical Equations & Physical Definitions
             * **Effective Index:** $n_{\text{clad}} < n_{\text{eff}} < n_{\text{core}}$
             * **Metal Absorption Loss:** $\alpha_{\text{metal}} = 4.343 \times \frac{4\pi}{\lambda} \cdot \text{Im}(n_{\text{eff}}) \quad [\text{dB/cm}]$
+            * **Heater Vertical Gap:** $y_{\text{heater}} = y_{\text{core\_top}} + H_{\text{gap}}$
             * **Complex Metal Permittivity:** $\tilde{\varepsilon} = (n + i k)^2$
-            * **Conformal Mapping Index Transformation:** $n_{\text{bend}}(x, y) = n(x, y) \cdot \left(1 + \frac{x}{R}\right)$
             """)
 
         # EXPORT SECTION
@@ -444,6 +453,7 @@ if analysis_type == "Single Point Analysis":
             "Waveguide Profile": wg_profile_type,
             "Metal Heater Active": "Yes" if include_metal_val else "No",
             "Metal Type": metal_type_val if include_metal_val else "N/A",
+            "Metal Gap [μm]": f"{metal_gap_val:.2f}" if include_metal_val else "N/A",
             "Metal Loss TE0": f"{r['te_modes'][0]['metal_loss_db_cm']:.3f} dB/cm" if (include_metal_val and len(r['te_modes'])>0) else "N/A",
             "Metal Loss TM0": f"{r['tm_modes'][0]['metal_loss_db_cm']:.3f} dB/cm" if (include_metal_val and len(r['tm_modes'])>0) else "N/A",
             "Geometry Path": "Ring Resonator" if ring_radius_val > 0.1 else "Straight Waveguide",
@@ -479,11 +489,11 @@ if analysis_type == "Single Point Analysis":
 # ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
-    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Oxide Top Thickness", "Slab Height", "Ring Radius", "Metal Offset"]
+    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Metal Gap", "Metal Offset", "Slab Height", "Ring Radius"]
     axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=3)
 
-    def_min = 1.50 if axis_1d == "Wavelength" else (-2.0 if axis_1d == "Metal Offset" else (0.1 if axis_1d=="Oxide Top Thickness" else 0.6))
-    def_max = 1.60 if axis_1d == "Wavelength" else (2.0 if axis_1d == "Metal Offset" else (2.0 if axis_1d=="Oxide Top Thickness" else 1.8))
+    def_min = 1.50 if axis_1d == "Wavelength" else (0.2 if axis_1d == "Metal Gap" else (-2.0 if axis_1d == "Metal Offset" else 0.6))
+    def_max = 1.60 if axis_1d == "Wavelength" else (2.5 if axis_1d == "Metal Gap" else (2.0 if axis_1d == "Metal Offset" else 1.8))
     def_pts = 11
 
     c_min, c_max, c_pts = st.sidebar.columns(3)
@@ -498,7 +508,7 @@ elif analysis_type == "1D Parametric Sweep":
     profile_choice_1d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=0)
     fixed_dict_1d["Profile Type"] = profile_choice_1d
     
-    inc_m_1d = st.sidebar.checkbox("Include Metal Heater", value=True if axis_1d=="Metal Offset" else False)
+    inc_m_1d = st.sidebar.checkbox("Include Metal Heater", value=True if axis_1d in ["Metal Gap", "Metal Offset"] else False)
     fixed_dict_1d["Include Metal Heater"] = inc_m_1d
     if inc_m_1d:
         fixed_dict_1d["Metal Type"] = st.sidebar.selectbox("Metal Type", options=["Al (Aluminum)", "Au (Gold)", "Pt (Platinum)"], index=0)
@@ -506,12 +516,15 @@ elif analysis_type == "1D Parametric Sweep":
         fixed_dict_1d["Metal Width"] = st.sidebar.number_input("Metal Width [μm]", value=2.0)
         if axis_1d != "Metal Offset":
             fixed_dict_1d["Metal Offset"] = st.sidebar.number_input("Metal Offset [μm]", value=0.0)
+        if axis_1d != "Metal Gap":
+            fixed_dict_1d["Metal Gap"] = st.sidebar.number_input("Metal Gap [μm]", value=1.0)
 
     for p in rem_params_1d:
-        if p not in ["Profile Type", "Include Metal Heater", "Metal Type", "Metal Thickness", "Metal Width", "Metal Offset"]:
-            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (1.0 if p=="Oxide Top Thickness" else 1.55)))
+        if p not in ["Profile Type", "Include Metal Heater", "Metal Type", "Metal Thickness", "Metal Width", "Metal Offset", "Metal Gap"]:
+            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else 1.55))
             fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
             
+    fixed_dict_1d["Oxide Top Thickness"] = st.sidebar.number_input("Oxide Top Thickness [μm]", value=2.0)
     fixed_dict_1d["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
     run_1d_btn = st.sidebar.button("🚀 Run 1D Sweep", type="primary", use_container_width=True)
@@ -670,20 +683,20 @@ elif analysis_type == "1D Parametric Sweep":
 # ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
-    param_options = ["Waveguide Width", "Waveguide Height", "Oxide Top Thickness", "Wavelength", "Ring Radius", "Metal Offset"]
+    param_options = ["Waveguide Width", "Waveguide Height", "Metal Gap", "Metal Offset", "Wavelength", "Ring Radius"]
     axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=2)
     axis_y = st.sidebar.selectbox("Second Scan Axis (Y)", options=[p for p in param_options if p != axis_x], index=0)
 
     st.sidebar.markdown(f"**Axis X ({axis_x}) Range:**")
     cx_min, cx_max, cx_pts = st.sidebar.columns(3)
-    vx_min = cx_min.number_input("Min X", value=0.5 if axis_x=="Oxide Top Thickness" else (-2.0 if axis_x=="Metal Offset" else 0.6), key="vx_min")
-    vx_max = cx_max.number_input("Max X", value=2.5 if axis_x=="Oxide Top Thickness" else (2.0 if axis_x=="Metal Offset" else 1.8), key="vx_max")
+    vx_min = cx_min.number_input("Min X", value=0.2 if axis_x=="Metal Gap" else (-2.0 if axis_x=="Metal Offset" else 0.6), key="vx_min")
+    vx_max = cx_max.number_input("Max X", value=2.5 if axis_x=="Metal Gap" else (2.0 if axis_x=="Metal Offset" else 1.8), key="vx_max")
     nx_pts = cx_pts.number_input("Pts X", value=7, min_value=3, max_value=21, key="nx_pts")
 
     st.sidebar.markdown(f"**Axis Y ({axis_y}) Range:**")
     cy_min, cy_max, cy_pts = st.sidebar.columns(3)
-    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (0.5 if axis_y=="Oxide Top Thickness" else 0.6), key="vy_min")
-    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (2.5 if axis_y=="Oxide Top Thickness" else 1.8), key="vy_max")
+    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (0.2 if axis_y=="Metal Gap" else 0.6), key="vy_min")
+    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (2.5 if axis_y=="Metal Gap" else 1.8), key="vy_max")
     ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
 
     remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
@@ -693,7 +706,7 @@ else:
     profile_choice_2d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=0)
     fixed_dict["Profile Type"] = profile_choice_2d
     
-    inc_m_2d = st.sidebar.checkbox("Include Metal Heater", value=True if "Metal Offset" in [axis_x, axis_y] else False)
+    inc_m_2d = st.sidebar.checkbox("Include Metal Heater", value=True if ("Metal Gap" in [axis_x, axis_y] or "Metal Offset" in [axis_x, axis_y]) else False)
     fixed_dict["Include Metal Heater"] = inc_m_2d
     if inc_m_2d:
         fixed_dict["Metal Type"] = st.sidebar.selectbox("Metal Type", options=["Al (Aluminum)", "Au (Gold)", "Pt (Platinum)"], index=0)
@@ -701,12 +714,15 @@ else:
         fixed_dict["Metal Width"] = st.sidebar.number_input("Metal Width [μm]", value=2.0)
         if "Metal Offset" not in [axis_x, axis_y]:
             fixed_dict["Metal Offset"] = st.sidebar.number_input("Metal Offset [μm]", value=0.0)
+        if "Metal Gap" not in [axis_x, axis_y]:
+            fixed_dict["Metal Gap"] = st.sidebar.number_input("Metal Gap [μm]", value=1.0)
 
     for p in remaining_params:
-        if p not in ["Profile Type", "Include Metal Heater", "Metal Type", "Metal Thickness", "Metal Width", "Metal Offset"]:
-            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (1.0 if p=="Oxide Top Thickness" else 1.55)))
+        if p not in ["Profile Type", "Include Metal Heater", "Metal Type", "Metal Thickness", "Metal Width", "Metal Offset", "Metal Gap"]:
+            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else 1.55))
             fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
             
+    fixed_dict["Oxide Top Thickness"] = st.sidebar.number_input("Oxide Top Thickness [μm]", value=2.0)
     fixed_dict["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
     run_2d_btn = st.sidebar.button("🚀 Run 2D Confinement Sweep", type="primary", use_container_width=True)
