@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: app.py
-# Version: v2.2.1 (Advanced Edition - Syntax Fixed)
+# Version: v2.3.0 (Advanced Edition - Metal Heater Support)
 # Date: August 2026
-# Description: Fixed string escapes in LaTeX formulas and Streamlit components.
+# Description: Added Metal Heater parameters (Metal Type, Thickness, Width, Offset) and absorption loss analysis.
 # ==============================================================================
 
 import streamlit as st
@@ -48,7 +48,7 @@ def inject_google_analytics(measurement_id):
 inject_google_analytics("G-7776KX662W")
 
 st.title("⚡ Universal Waveguide Core & Air Confinement Solver (Advanced Edition)")
-st.markdown("### Strip & Rib Waveguides, Bending Losses (M1/M3) & PDF Export")
+st.markdown("### Metal Heaters (Al, Au, Pt), Rib/Strip Waveguides & PDF Export")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
@@ -91,7 +91,7 @@ def display_fig_with_download(fig, filename, key_unique):
         key=key_unique
     )
 
-# --- HELPER FUNCTION: DRAW STRIP OR RIB CORE OUTLINE ON MATPLOTLIB AXIS ---
+# --- HELPER FUNCTION: DRAW STRIP, RIB & METAL OUTLINES ON MATPLOTLIB AXIS ---
 def draw_core_outline(ax, sp_r):
     wg_type = sp_r.get('wg_type', 'Strip')
     w_top = sp_r.get('w_top', 1.5)
@@ -109,6 +109,20 @@ def draw_core_outline(ax, sp_r):
         y_coords = [y_min, y_min, y_max, y_max, y_min]
         
     ax.plot(x_coords, y_coords, 'w--', lw=1.5, label='Core Boundary')
+
+    # Draw Metal Heater outline if enabled
+    if sp_r.get('include_metal', False):
+        m_thick = sp_r.get('metal_thick_um', 0.10)
+        m_width = sp_r.get('metal_width_um', 2.0)
+        m_offset = sp_r.get('metal_offset_um', 0.0)
+        y_m_min = sp_r['interface_y']
+        y_m_max = y_m_min + m_thick
+        x_m_min = m_offset - m_width / 2.0
+        x_m_max = m_offset + m_width / 2.0
+        
+        mx = [x_m_min, x_m_max, x_m_max, x_m_min, x_m_min]
+        my = [y_m_min, y_m_min, y_m_max, y_m_max, y_m_min]
+        ax.plot(mx, my, 'c-', lw=2, label=f"Metal Heater ({sp_r.get('metal_type','Al')})")
 
 # --- HELPER FUNCTION: GENERATE PDF REPORT ---
 def create_pdf_report(title, summary_dict, figs_dict):
@@ -145,10 +159,9 @@ def create_pdf_report(title, summary_dict, figs_dict):
     story.append(Paragraph("2. Governing Physical Equations", h2_style))
     eq_text = """
     <b>Effective Index:</b> n_clad &lt; n_eff &lt; n_core <br/>
-    <b>Conformal Mapping Transformation:</b> n_bend(x,y) = n(x,y) &times; (1 + x/R) <br/>
-    <b>Confinement Factor:</b> &Gamma;_Core = &iint;_Core |E|&sup2; dx dy / &iint;_Total |E|&sup2; dx dy &times; 100% <br/>
-    <b>Bending Loss (M1 - Caustic Tail):</b> Derived from tail power beyond x_rad = R &times; (n_eff/n_clad - 1) <br/>
-    <b>Bending Loss (M3 - Marcuse):</b> &alpha; &propto; exp(-2/3 k0 R &Delta;n&sup3;&frasl;&sup2; / n_eff&sup2;)
+    <b>Metal Loss Calculation:</b> Absorption Loss = 4.343 &times; (4&pi;/&lambda;) &times; Im(n_eff) dB/cm <br/>
+    <b>Bending Index Transformation:</b> n_bend(x,y) = n(x,y) &times; (1 + x/R) <br/>
+    <b>Confinement Factor:</b> &Gamma;_Core = &iint;_Core |E|&sup2; dx dy / &iint;_Total |E|&sup2; dx dy &times; 100%
     """
     story.append(Paragraph(eq_text, body_style))
     story.append(Spacer(1, 12))
@@ -173,10 +186,10 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
         mid_sp = sample_points_dict["Mid"]["res"]
         st.markdown(r"#### 📐 Cross-Sectional Refractive Index Distribution $n(x,y)$")
         fig_n, ax_n = plt.subplots(figsize=(7, 3.8))
-        n_mesh = np.sqrt(mid_sp['eps_mesh'])
+        n_mesh = np.abs(np.sqrt(mid_sp['eps_mesh']))
         im_n = ax_n.imshow(n_mesh.T, origin='lower', extent=[mid_sp['xc'][0], mid_sp['xc'][-1], mid_sp['yc'][0], mid_sp['yc'][-1]], cmap='viridis', aspect='auto')
         draw_core_outline(ax_n, mid_sp)
-        fig_n.colorbar(im_n, ax=ax_n, label='Refractive Index (n)')
+        fig_n.colorbar(im_n, ax=ax_n, label='Refractive Index (|n|)')
         ax_n.set_xlabel('Horizontal Position X [μm]')
         ax_n.set_ylabel('Vertical Position Y [μm]')
         display_fig_with_download(fig_n, "refractive_index_profile.png", f"{prefix_key}_n_prof")
@@ -242,8 +255,24 @@ if analysis_type == "Single Point Analysis":
     h_core = st.sidebar.number_input("Waveguide Height [μm]", value=0.4, step=0.05)
     sidewall_angle = st.sidebar.slider("Sidewall Angle [deg]", min_value=30.0, max_value=90.0, value=90.0, step=1.0)
     lam_um = st.sidebar.number_input("Wavelength [μm]", value=1.55, step=0.01)
-    top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=0.1, step=0.05)
+    top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=1.0, step=0.1, help="Cladding gap between Core and Metal Heater.")
     bottom_ox = st.sidebar.number_input("Oxide Bottom Thickness (BOX) [μm]", value=4.0, step=0.5)
+
+    # --- METAL HEATER OPTIONS ---
+    st.sidebar.header("🔥 Metal Heater Options")
+    include_metal_val = st.sidebar.checkbox("Include Metal Heater Layer", value=False)
+    
+    metal_type_val = "Al (Aluminum)"
+    metal_thick_val = 0.10
+    metal_width_val = 2.0
+    metal_offset_val = 0.0
+    
+    if include_metal_val:
+        metal_type_val = st.sidebar.selectbox("Metal Type", options=["Al (Aluminum)", "Au (Gold)", "Pt (Platinum)"], index=0)
+        c_m1, c_m2 = st.sidebar.columns(2)
+        metal_thick_val = c_m1.number_input("Heater Thickness [μm]", value=0.10, step=0.01)
+        metal_width_val = c_m2.number_input("Heater Width [μm]", value=2.00, step=0.2)
+        metal_offset_val = st.sidebar.number_input("Heater Offset from WG Center [μm]", value=0.0, step=0.1)
 
     st.sidebar.header("🔍 Advanced Search")
     search_higher_modes = st.sidebar.checkbox("Search for Higher-Order Modes", value=False)
@@ -252,11 +281,13 @@ if analysis_type == "Single Point Analysis":
 
     if run_sp_btn or 'sp_results' in st.session_state:
         if run_sp_btn:
-            with st.spinner("Solving optical wave equations..."):
+            with st.spinner("Solving optical wave equations with complex metal permittivity..."):
                 res = run_single_point(
                     w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice,
                     search_higher_modes, sidewall_angle, ring_radius_val,
-                    wg_type=wg_profile_type, h_slab=h_slab_val, w_slab=w_slab_val
+                    wg_type=wg_profile_type, h_slab=h_slab_val, w_slab=w_slab_val,
+                    include_metal=include_metal_val, metal_type=metal_type_val,
+                    metal_thick_um=metal_thick_val, metal_width_um=metal_width_val, metal_offset_um=metal_offset_val
                 )
                 st.session_state['sp_results'] = res
 
@@ -268,21 +299,14 @@ if analysis_type == "Single Point Analysis":
         if len(r['te_modes']) > 0: m3.metric("TE0 n_eff", f"{r['te_modes'][0]['neff']:.4f}")
         if len(r['tm_modes']) > 0: m4.metric("TM0 n_eff", f"{r['tm_modes'][0]['neff']:.4f}")
 
-        if r.get('ring_radius_um', 0.0) > 0.1:
+        if r.get('include_metal', False):
             m0_te = r['te_modes'][0] if len(r['te_modes']) > 0 else None
-            if m0_te:
-                b_info = m0_te['bend_info']
-                st.markdown(rf"""
-                ### 🌀 Bending Loss & Convergence Analysis (TE0 Mode)
-                * **Method 1 (Caustic Tail Integration Loss):** `{b_info['loss_m1']:.3f} dB/cm`
-                * **Method 3 (Marcuse Analytical Formula Loss):** `{b_info['loss_m3']:.3f} dB/cm`
-                * **Minimal Recommended Radius ($R_{{\text{{min}}}}$):** `{b_info['r_min_um']:.2f} μm`
-                * **Caustic Radiation Boundary ($x_{{\\text{{rad}}}}$):** `{b_info['x_rad_um']:.2f} μm`
-                """)
-                if b_info['converged']:
-                    st.success("✅ **High Convergence:** Method 1 (Caustic Integration) and Method 3 (Marcuse Analytical) show excellent agreement.")
-                else:
-                    st.warning("⚠️ **Divergence Warning:** Radius R is below or close to R_min. Radiative tunneling dominates; numerical caustic integration deviates from analytical approximation.")
+            m0_tm = r['tm_modes'][0] if len(r['tm_modes']) > 0 else None
+            st.info(f"""
+            🔥 **Metal Heater Active ({r['metal_type']}):** Width = `{r['metal_width_um']} μm`, Thickness = `{r['metal_thick_um']} μm`, Offset = `{r['metal_offset_um']} μm`. <br/>
+            * **TE0 Metal Absorption Loss:** `{m0_te['metal_loss_db_cm']:.3f} dB/cm` if TE0 exists. <br/>
+            * **TM0 Metal Absorption Loss:** `{m0_tm['metal_loss_db_cm']:.3f} dB/cm` if TM0 exists.
+            """, icon="🔥")
 
         st.markdown("---")
         
@@ -303,10 +327,10 @@ if analysis_type == "Single Point Analysis":
         with tabs[tab_idx]:
             st.subheader(f"Cross-Sectional Refractive Index Distribution n(x,y) - {core_material} ({r['wg_type']} WG)")
             fig_idx_prof, ax_idx_prof = plt.subplots(figsize=(7, 4))
-            n_mesh = np.sqrt(r['eps_mesh'])
+            n_mesh = np.abs(np.sqrt(r['eps_mesh']))
             im_n = ax_idx_prof.imshow(n_mesh.T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='viridis', aspect='auto')
             draw_core_outline(ax_idx_prof, r)
-            fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Effective Index Grid n(x,y)')
+            fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Effective Index Grid (|n|)')
             ax_idx_prof.set_xlabel('Horizontal Position X [μm]')
             ax_idx_prof.set_ylabel('Vertical Position Y [μm]')
             display_fig_with_download(fig_idx_prof, f"refractive_index_profile_{core_material}.png", "sp_n_prof")
@@ -326,9 +350,9 @@ if analysis_type == "Single Point Analysis":
                     * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** `{m['gamma_air']:.2f}%`
                     * **Effective Area ($A_{{\\text{{eff}}}}$):** `{m['a_eff']:.3f} μm²`
                     * **Mode Field Diameter (MFD):** `{m['mfd']:.3f} μm`
-                    * **Method 1 Loss (Caustic Tail):** `{b['loss_m1']:.3f} dB/cm`
-                    * **Method 3 Loss (Marcuse):** `{b['loss_m3']:.3f} dB/cm`
-                    * **Calculated $R_{{\\text{{min}}}}$:** `{b['r_min_um']:.2f} μm`
+                    * **Metal Absorption Loss:** `{m['metal_loss_db_cm']:.3f} dB/cm`
+                    * **Bending Loss (Method 1 - Caustic):** `{b['loss_m1']:.3f} dB/cm`
+                    * **Bending Loss (Method 3 - Marcuse):** `{b['loss_m3']:.3f} dB/cm`
                     """)
                 with col_img:
                     fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
@@ -356,9 +380,9 @@ if analysis_type == "Single Point Analysis":
                     * **Air Confinement ($\Gamma_{{\\text{{Air}}}}$):** `{m['gamma_air']:.2f}%`
                     * **Effective Area ($A_{{\\text{{eff}}}}$):** `{m['a_eff']:.3f} μm²`
                     * **Mode Field Diameter (MFD):** `{m['mfd']:.3f} μm`
-                    * **Method 1 Loss (Caustic Tail):** `{b['loss_m1']:.3f} dB/cm`
-                    * **Method 3 Loss (Marcuse):** `{b['loss_m3']:.3f} dB/cm`
-                    * **Calculated $R_{{\\text{{min}}}}$:** `{b['r_min_um']:.2f} μm`
+                    * **Metal Absorption Loss:** `{m['metal_loss_db_cm']:.3f} dB/cm`
+                    * **Bending Loss (Method 1 - Caustic):** `{b['loss_m1']:.3f} dB/cm`
+                    * **Bending Loss (Method 3 - Marcuse):** `{b['loss_m3']:.3f} dB/cm`
                     """)
                 with col_img:
                     fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
@@ -405,11 +429,9 @@ if analysis_type == "Single Point Analysis":
             st.markdown(r"""
             ### 📖 Mathematical Equations & Physical Definitions
             * **Effective Index:** $n_{\text{clad}} < n_{\text{eff}} < n_{\text{core}}$
+            * **Metal Absorption Loss:** $\alpha_{\text{metal}} = 4.343 \times \frac{4\pi}{\lambda} \cdot \text{Im}(n_{\text{eff}}) \quad [\text{dB/cm}]$
+            * **Complex Metal Permittivity:** $\tilde{\varepsilon} = (n + i k)^2$
             * **Conformal Mapping Index Transformation:** $n_{\text{bend}}(x, y) = n(x, y) \cdot \left(1 + \frac{x}{R}\right)$
-            * **Method 1 (Caustic Tail Loss Integration):**
-              $$\text{Power Ratio} = \frac{\iint_{x \ge x_{\text{rad}}} |E|^2 dx dy}{\iint |E|^2 dx dy}, \quad x_{\text{rad}} = R \cdot \left(\frac{n_{\text{eff}}}{n_{\text{clad}}} - 1\right)$$
-            * **Method 3 (Marcuse Analytical Bending Loss & Minimum Radius):**
-              $$R_{\text{min}} = \frac{3 \lambda}{4\pi (n_{\text{eff}}^2 - n_{\text{clad}}^2)^{3/2}}, \quad \alpha \propto \exp\left(-\frac{2}{3} k_0 R \frac{\Delta n^{3/2}}{n_{\text{eff}}^2}\right)$$
             """)
 
         # EXPORT SECTION
@@ -420,25 +442,17 @@ if analysis_type == "Single Point Analysis":
         summary_info = {
             "Core Material": core_material,
             "Waveguide Profile": wg_profile_type,
-            "Slab Height [μm]": f"{h_slab_val:.3f}" if wg_profile_type=="Rib" else "N/A",
-            "Slab Width [μm]": f"{w_slab_val:.3f}" if wg_profile_type=="Rib" else "N/A",
+            "Metal Heater Active": "Yes" if include_metal_val else "No",
+            "Metal Type": metal_type_val if include_metal_val else "N/A",
+            "Metal Loss TE0": f"{r['te_modes'][0]['metal_loss_db_cm']:.3f} dB/cm" if (include_metal_val and len(r['te_modes'])>0) else "N/A",
+            "Metal Loss TM0": f"{r['tm_modes'][0]['metal_loss_db_cm']:.3f} dB/cm" if (include_metal_val and len(r['tm_modes'])>0) else "N/A",
             "Geometry Path": "Ring Resonator" if ring_radius_val > 0.1 else "Straight Waveguide",
-            "Ring Radius [μm]": f"{ring_radius_val:.1f}" if ring_radius_val > 0.1 else "Infinity (Straight)",
             "Wavelength [μm]": lam_um,
             "Top Width [μm]": w_core,
-            "Bottom Width [μm]": f"{r['w_bottom']:.3f}",
-            "Sidewall Angle": f"{sidewall_angle}°",
             "Core Height [μm]": h_core,
             "Top Oxide [μm]": top_ox,
-            "BOX Thickness [μm]": bottom_ox,
-            "Bound TE Modes": len(r['te_modes']),
-            "Bound TM Modes": len(r['tm_modes'])
+            "BOX Thickness [μm]": bottom_ox
         }
-        if len(r['te_modes']) > 0:
-            summary_info["TE0 Effective Index"] = f"{r['te_modes'][0]['neff']:.5f}"
-            summary_info["TE0 Loss (Method 1)"] = f"{r['te_modes'][0]['bend_info']['loss_m1']:.3f} dB/cm"
-            summary_info["TE0 Loss (Method 3)"] = f"{r['te_modes'][0]['bend_info']['loss_m3']:.3f} dB/cm"
-            summary_info["TE0 Est. R_min"] = f"{r['te_modes'][0]['bend_info']['r_min_um']:.2f} μm"
 
         with c_exp1:
             pdf_bytes = create_pdf_report("Single Point Mode Analysis Report", summary_info, figs_for_pdf)
@@ -465,32 +479,37 @@ if analysis_type == "Single Point Analysis":
 # ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
-    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Slab Height", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
+    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Oxide Top Thickness", "Slab Height", "Ring Radius", "Metal Offset"]
     axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=3)
 
-    def_min = 1.50 if axis_1d == "Wavelength" else (0.05 if axis_1d == "Slab Height" else (5.0 if axis_1d == "Ring Radius" else (60.0 if axis_1d == "Sidewall Angle" else (0.6 if axis_1d == "Waveguide Width" else 0.2))))
-    def_max = 1.60 if axis_1d == "Wavelength" else (0.20 if axis_1d == "Slab Height" else (50.0 if axis_1d == "Ring Radius" else (90.0 if axis_1d == "Sidewall Angle" else (1.8 if axis_1d == "Waveguide Width" else 0.6))))
+    def_min = 1.50 if axis_1d == "Wavelength" else (-2.0 if axis_1d == "Metal Offset" else (0.1 if axis_1d=="Oxide Top Thickness" else 0.6))
+    def_max = 1.60 if axis_1d == "Wavelength" else (2.0 if axis_1d == "Metal Offset" else (2.0 if axis_1d=="Oxide Top Thickness" else 1.8))
     def_pts = 11
 
     c_min, c_max, c_pts = st.sidebar.columns(3)
-    val_min = c_min.number_input("Min", value=def_min, step=0.05 if axis_1d not in ["Sidewall Angle", "Ring Radius"] else 1.0)
-    val_max = c_max.number_input("Max", value=def_max, step=0.05 if axis_1d not in ["Sidewall Angle", "Ring Radius"] else 5.0)
+    val_min = c_min.number_input("Min", value=def_min, step=0.1)
+    val_max = c_max.number_input("Max", value=def_max, step=0.1)
     num_pts = c_pts.number_input("Points", value=def_pts, min_value=3, max_value=51, step=2)
 
     rem_params_1d = [p for p in param_options if p != axis_1d]
     fixed_dict_1d = {}
     st.sidebar.markdown("**Fixed Parameters:**")
     
-    profile_choice_1d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=1 if axis_1d=="Slab Height" else 0)
+    profile_choice_1d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=0)
     fixed_dict_1d["Profile Type"] = profile_choice_1d
     
+    inc_m_1d = st.sidebar.checkbox("Include Metal Heater", value=True if axis_1d=="Metal Offset" else False)
+    fixed_dict_1d["Include Metal Heater"] = inc_m_1d
+    if inc_m_1d:
+        fixed_dict_1d["Metal Type"] = st.sidebar.selectbox("Metal Type", options=["Al (Aluminum)", "Au (Gold)", "Pt (Platinum)"], index=0)
+        fixed_dict_1d["Metal Thickness"] = st.sidebar.number_input("Metal Thickness [μm]", value=0.10)
+        fixed_dict_1d["Metal Width"] = st.sidebar.number_input("Metal Width [μm]", value=2.0)
+        if axis_1d != "Metal Offset":
+            fixed_dict_1d["Metal Offset"] = st.sidebar.number_input("Metal Offset [μm]", value=0.0)
+
     for p in rem_params_1d:
-        if p == "Slab Height":
-            fixed_dict_1d[p] = st.sidebar.number_input("Slab Height (Fixed) [μm]", value=0.09)
-        elif p == "Slab Width":
-            fixed_dict_1d[p] = st.sidebar.number_input("Slab Width (Fixed) [μm]", value=3.0)
-        else:
-            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
+        if p not in ["Profile Type", "Include Metal Heater", "Metal Type", "Metal Thickness", "Metal Width", "Metal Offset"]:
+            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (1.0 if p=="Oxide Top Thickness" else 1.55)))
             fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
             
     fixed_dict_1d["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
@@ -518,7 +537,7 @@ elif analysis_type == "1D Parametric Sweep":
 
         tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
             "📐 Geometry & Sample Profiles",
-            "🌀 Bending Loss Convergence (M1 vs M3)",
+            "🔥 Metal Absorption Loss [dB/cm]",
             "📈 Effective Index (n_eff)",
             "🔍 Material vs. Modal Index",
             "🎯 Confinement Factor (Γ)",
@@ -531,19 +550,17 @@ elif analysis_type == "1D Parametric Sweep":
             render_index_and_3_sample_fields(s1['sample_points'], prefix_key="1d_tab1")
 
         with tab2:
-            st.subheader("🌀 Bending Loss Method Convergence (Method 1 vs Method 3)")
-            fig_b_comp, ax_b_comp = plt.subplots(figsize=(7, 4))
+            st.subheader("🔥 Metal Heater Absorption Loss Analysis")
+            fig_m_loss, ax_m_loss = plt.subplots(figsize=(7, 4))
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
-                ax_b_comp.plot(s1['param_vec'], s1['loss_m1_te'], 'bo-', lw=2, label='TE0 Method 1 (Caustic Tail Integration)')
-                ax_b_comp.plot(s1['param_vec'], s1['loss_m3_te'], 'b--^', lw=2, label='TE0 Method 3 (Marcuse Analytical)')
+                ax_m_loss.plot(s1['param_vec'], s1['metal_loss_te'], 'bo-', lw=2, label='TE0 Metal Loss')
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
-                ax_b_comp.plot(s1['param_vec'], s1['loss_m1_tm'], 'rs-', lw=2, label='TM0 Method 1 (Caustic Tail Integration)')
-                ax_b_comp.plot(s1['param_vec'], s1['loss_m3_tm'], 'r--v', lw=2, label='TM0 Method 3 (Marcuse Analytical)')
-            ax_b_comp.grid(True); ax_b_comp.legend()
-            ax_b_comp.set_xlabel(s1['param_name'])
-            ax_b_comp.set_ylabel('Bending Loss [dB/cm]')
-            display_fig_with_download(fig_b_comp, f"1D_bending_loss_convergence_vs_{axis_1d}.png", "1d_bend_loss_comp_fig")
-            figs_for_pdf_1d["Bending Loss Convergence"] = fig_b_comp
+                ax_m_loss.plot(s1['param_vec'], s1['metal_loss_tm'], 'rs-', lw=2, label='TM0 Metal Loss')
+            ax_m_loss.grid(True); ax_m_loss.legend()
+            ax_m_loss.set_xlabel(s1['param_name'])
+            ax_m_loss.set_ylabel('Metal Absorption Loss [dB/cm]')
+            display_fig_with_download(fig_m_loss, f"1D_metal_loss_vs_{axis_1d}.png", "1d_m_loss_fig")
+            figs_for_pdf_1d["Metal Absorption Loss"] = fig_m_loss
 
         with tab3:
             fig_n, ax_n = plt.subplots(figsize=(7, 4))
@@ -634,14 +651,10 @@ elif analysis_type == "1D Parametric Sweep":
             }
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]:
                 data_dict_1d['neff_TE0'] = s1['neff_te']
-                data_dict_1d['Loss_Method1_TE0_dBcm'] = s1['loss_m1_te']
-                data_dict_1d['Loss_Method3_TE0_dBcm'] = s1['loss_m3_te']
-                data_dict_1d['R_min_TE0_um'] = s1['r_min_te']
+                data_dict_1d['Metal_Loss_TE0_dBcm'] = s1['metal_loss_te']
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]:
                 data_dict_1d['neff_TM0'] = s1['neff_tm']
-                data_dict_1d['Loss_Method1_TM0_dBcm'] = s1['loss_m1_tm']
-                data_dict_1d['Loss_Method3_TM0_dBcm'] = s1['loss_m3_tm']
-                data_dict_1d['R_min_TM0_um'] = s1['r_min_tm']
+                data_dict_1d['Metal_Loss_TM0_dBcm'] = s1['metal_loss_tm']
                 
             csv_df_1d = pd.DataFrame(data_dict_1d)
             st.download_button(
@@ -657,36 +670,41 @@ elif analysis_type == "1D Parametric Sweep":
 # ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
-    param_options = ["Waveguide Width", "Waveguide Height", "Slab Height", "Wavelength", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
-    axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=3)
+    param_options = ["Waveguide Width", "Waveguide Height", "Oxide Top Thickness", "Wavelength", "Ring Radius", "Metal Offset"]
+    axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=2)
     axis_y = st.sidebar.selectbox("Second Scan Axis (Y)", options=[p for p in param_options if p != axis_x], index=0)
 
     st.sidebar.markdown(f"**Axis X ({axis_x}) Range:**")
     cx_min, cx_max, cx_pts = st.sidebar.columns(3)
-    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else (0.05 if axis_x=="Slab Height" else (5.0 if axis_x=="Ring Radius" else (60.0 if axis_x=="Sidewall Angle" else 0.6))), key="vx_min")
-    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else (0.20 if axis_x=="Slab Height" else (50.0 if axis_x=="Ring Radius" else (90.0 if axis_x=="Sidewall Angle" else 1.8))), key="vx_max")
+    vx_min = cx_min.number_input("Min X", value=0.5 if axis_x=="Oxide Top Thickness" else (-2.0 if axis_x=="Metal Offset" else 0.6), key="vx_min")
+    vx_max = cx_max.number_input("Max X", value=2.5 if axis_x=="Oxide Top Thickness" else (2.0 if axis_x=="Metal Offset" else 1.8), key="vx_max")
     nx_pts = cx_pts.number_input("Pts X", value=7, min_value=3, max_value=21, key="nx_pts")
 
     st.sidebar.markdown(f"**Axis Y ({axis_y}) Range:**")
     cy_min, cy_max, cy_pts = st.sidebar.columns(3)
-    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (0.05 if axis_y=="Slab Height" else (5.0 if axis_y=="Ring Radius" else (60.0 if axis_y=="Sidewall Angle" else 0.6))), key="vy_min")
-    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (0.20 if axis_y=="Slab Height" else (50.0 if axis_y=="Ring Radius" else (90.0 if axis_y=="Sidewall Angle" else 1.8))), key="vy_max")
+    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (0.5 if axis_y=="Oxide Top Thickness" else 0.6), key="vy_min")
+    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (2.5 if axis_y=="Oxide Top Thickness" else 1.8), key="vy_max")
     ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
 
     remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
     fixed_dict = {}
     st.sidebar.markdown("**Fixed Parameters:**")
     
-    profile_choice_2d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=1 if "Slab Height" in [axis_x, axis_y] else 0)
+    profile_choice_2d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=0)
     fixed_dict["Profile Type"] = profile_choice_2d
     
+    inc_m_2d = st.sidebar.checkbox("Include Metal Heater", value=True if "Metal Offset" in [axis_x, axis_y] else False)
+    fixed_dict["Include Metal Heater"] = inc_m_2d
+    if inc_m_2d:
+        fixed_dict["Metal Type"] = st.sidebar.selectbox("Metal Type", options=["Al (Aluminum)", "Au (Gold)", "Pt (Platinum)"], index=0)
+        fixed_dict["Metal Thickness"] = st.sidebar.number_input("Metal Thickness [μm]", value=0.10)
+        fixed_dict["Metal Width"] = st.sidebar.number_input("Metal Width [μm]", value=2.0)
+        if "Metal Offset" not in [axis_x, axis_y]:
+            fixed_dict["Metal Offset"] = st.sidebar.number_input("Metal Offset [μm]", value=0.0)
+
     for p in remaining_params:
-        if p == "Slab Height":
-            fixed_dict[p] = st.sidebar.number_input("Slab Height (Fixed) [μm]", value=0.09)
-        elif p == "Slab Width":
-            fixed_dict[p] = st.sidebar.number_input("Slab Width (Fixed) [μm]", value=3.0)
-        else:
-            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
+        if p not in ["Profile Type", "Include Metal Heater", "Metal Type", "Metal Thickness", "Metal Width", "Metal Offset"]:
+            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (1.0 if p=="Oxide Top Thickness" else 1.55)))
             fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
             
     fixed_dict["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
