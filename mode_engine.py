@@ -1,3 +1,10 @@
+# ==============================================================================
+# File: mode_engine.py
+# Version: v2.0.0 (Advanced Edition - Bending / Ring Resonator Support)
+# Date: August 2026
+# Description: Added Conformal Mapping Index Transformation for Ring Resonator bending.
+# ==============================================================================
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -42,10 +49,9 @@ def get_core_index(lam_um, material_name):
     elif material_name == "Si (Silicon)": return n_silicon(lam_um)
     else: return n_sin_stoch(lam_um)
 
-# --- TRAPEZOIDAL MESH GENERATION ---
+# --- TRAPEZOIDAL & BENDED MESH GENERATION ---
 
-def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, sidewall_angle_deg=90.0):
-    # Calculate bottom width based on sidewall angle (deg)
+def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, sidewall_angle_deg=90.0, ring_radius_um=0.0):
     angle_rad = np.radians(np.clip(sidewall_angle_deg, 1.0, 90.0))
     w_bottom = w_core + (2.0 * h_core / np.tan(angle_rad)) if sidewall_angle_deg < 89.9 else w_core
     
@@ -66,14 +72,12 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     
     y_min, y_max = bottom_ox, bottom_ox + h_core
     
-    # Vectorized trapezoidal core mask
     XC, YC = np.meshgrid(xc, yc, indexing='ij')
     in_height = (YC >= y_min) & (YC <= y_max)
     
     if sidewall_angle_deg >= 89.9:
         half_w_y = w_core / 2.0
     else:
-        # Width expands linearly from top to bottom
         half_w_y = (w_core / 2.0) + (y_max - YC) / np.tan(angle_rad)
         
     core_mask = in_height & (np.abs(XC) <= half_w_y)
@@ -83,8 +87,12 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     air_mask_1d = yc > interface_y
     eps[:, air_mask_1d] = 1.0**2  # Air n=1
     
-    air_mask = np.repeat(air_mask_1d[None, :], len(xc), axis=0)
+    # Apply Conformal Index Transformation for Ring Resonator Bending (Yariv / Heiblum method)
+    if ring_radius_um > 0.1:
+        conformal_factor = (1.0 + XC / ring_radius_um)**2
+        eps = eps * conformal_factor
     
+    air_mask = np.repeat(air_mask_1d[None, :], len(xc), axis=0)
     x_min, x_max = -w_bottom / 2.0, w_bottom / 2.0
     
     return xc, yc, eps, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom
@@ -162,19 +170,20 @@ def calc_fwhm(vec, profile):
     return 0.0
 
 # --- SINGLE POINT SOLVER ---
-def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, sidewall_angle_deg=90.0):
+def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, sidewall_angle_deg=90.0, ring_radius_um=0.0):
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
     n_core = get_core_index(lam_um, core_material)
     n_clad = sellmeier_sio2(lam_um)
     
     xc, yc, eps_mesh, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom = build_advanced_mesh(
-        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg
+        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg, ring_radius_um
     )
     
     res = {
         'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh, 'core_mask': core_mask,
         'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max,
         'w_top': w_core, 'w_bottom': w_bottom, 'sidewall_angle_deg': sidewall_angle_deg,
+        'ring_radius_um': ring_radius_um,
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice,
         'te_modes': [], 'tm_modes': []
     }
@@ -257,6 +266,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         
         lam_curr = p_dict['Wavelength']
         sidewall_angle = p_dict.get('Sidewall Angle', 90.0)
+        ring_radius = p_dict.get('Ring Radius', 0.0)
         
         res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
         res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
@@ -265,7 +275,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             p_dict['Waveguide Width'], p_dict['Waveguide Height'],
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
             lam_curr, res_mode, core_material, pol_choice,
-            search_higher_modes=False, sidewall_angle_deg=sidewall_angle
+            search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius
         )
         
         if i in sample_indices:
@@ -331,12 +341,13 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             p_dict[param2_name] = val2
             
             sidewall_angle = p_dict.get('Sidewall Angle', 90.0)
+            ring_radius = p_dict.get('Ring Radius', 0.0)
             
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
                 p_dict['Wavelength'], res_mode, core_material, pol_choice,
-                search_higher_modes=False, sidewall_angle_deg=sidewall_angle
+                search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius
             )
             
             if (j == 0 and i == 0):
