@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: mode_engine.py
-# Version: v2.3.0 (Advanced Edition - Metal Heater & Complex Permittivity)
+# Version: v2.4.1 (Advanced Edition - Fixed & Metal Gap Implemented)
 # Date: August 2026
-# Description: Added Metal Heater support (Al, Au, Pt) with complex refractive index & metal absorption loss calculation.
+# Description: Added Metal Gap parameter (distance from top of WG core to bottom of heater) and updated mesh generation.
 # ==============================================================================
 
 import numpy as np
@@ -66,15 +66,18 @@ def get_metal_complex_index(metal_type, lam_um=1.55):
 def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, 
                         sidewall_angle_deg=90.0, ring_radius_um=0.0,
                         wg_type="Strip", h_slab=0.0, w_slab=0.0,
-                        include_metal=False, metal_type="Al (Aluminum)", metal_thick_um=0.10, metal_width_um=2.0, metal_offset_um=0.0):
+                        include_metal=False, metal_type="Al (Aluminum)", metal_thick_um=0.10, metal_width_um=2.0, metal_offset_um=0.0, metal_gap_um=1.0):
     
     angle_rad = np.radians(np.clip(sidewall_angle_deg, 1.0, 90.0))
     w_bottom = w_core + (2.0 * h_core / np.tan(angle_rad)) if sidewall_angle_deg < 89.9 else w_core
     
     max_w = max(w_core, w_bottom, w_slab if wg_type=="Rib" else 0.0, abs(metal_offset_um) + metal_width_um/2.0 if include_metal else 0.0)
     
+    y_core_top = bottom_ox + (h_slab if wg_type=="Rib" else 0.0) + h_core
+    y_metal_max = (y_core_top + metal_gap_um + metal_thick_um) if include_metal else y_core_top
+    
     total_width = max_w + 2 * side_margin
-    total_height = bottom_ox + (h_slab if wg_type=="Rib" else 0.0) + h_core + top_ox + (metal_thick_um if include_metal else 0.0) + 1.5
+    total_height = max(y_metal_max, y_core_top + top_ox) + 1.5
     
     nx = int(np.round(total_width / dx)) + 1
     ny = int(np.round(total_height / dy)) + 1
@@ -125,21 +128,21 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
         eps[core_mask] = n_core**2
         interface_y = bottom_ox + h_core + top_ox
 
-    # 3. Add Metal Heater Element if enabled
+    # Add Metal Heater Element if enabled
     metal_mask = np.zeros_like(core_mask, dtype=bool)
     if include_metal:
         n_complex_metal = get_metal_complex_index(metal_type)
         eps_metal = n_complex_metal**2
         
-        y_metal_min = interface_y
-        y_metal_max = interface_y + metal_thick_um
+        y_metal_min = y_core_top + metal_gap_um
+        y_metal_max = y_metal_min + metal_thick_um
         x_metal_min = metal_offset_um - (metal_width_um / 2.0)
         x_metal_max = metal_offset_um + (metal_width_um / 2.0)
         
         metal_mask = (YC >= y_metal_min) & (YC <= y_metal_max) & (XC >= x_metal_min) & (XC <= x_metal_max)
         eps[metal_mask] = eps_metal
 
-    air_mask_1d = yc > (interface_y + (metal_thick_um if include_metal else 0.0))
+    air_mask_1d = yc > max(interface_y, y_core_top + metal_gap_um + (metal_thick_um if include_metal else 0.0))
     eps[:, air_mask_1d] = 1.0**2  # Air n=1
     
     if ring_radius_um > 0.1:
@@ -265,7 +268,7 @@ def calc_fwhm(vec, profile):
 def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", 
                      search_higher_modes=False, sidewall_angle_deg=90.0, ring_radius_um=0.0, 
                      wg_type="Strip", h_slab=0.0, w_slab=0.0,
-                     include_metal=False, metal_type="Al (Aluminum)", metal_thick_um=0.10, metal_width_um=2.0, metal_offset_um=0.0):
+                     include_metal=False, metal_type="Al (Aluminum)", metal_thick_um=0.10, metal_width_um=2.0, metal_offset_um=0.0, metal_gap_um=1.0):
     
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
     n_core = get_core_index(lam_um, core_material)
@@ -273,7 +276,7 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
     
     xc, yc, eps_mesh, core_mask, air_mask, metal_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom = build_advanced_mesh(
         w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg, ring_radius_um, 
-        wg_type, h_slab, w_slab, include_metal, metal_type, metal_thick_um, metal_width_um, metal_offset_um
+        wg_type, h_slab, w_slab, include_metal, metal_type, metal_thick_um, metal_width_um, metal_offset_um, metal_gap_um
     )
     
     res = {
@@ -282,7 +285,7 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
         'w_top': w_core, 'w_bottom': w_bottom, 'sidewall_angle_deg': sidewall_angle_deg,
         'ring_radius_um': ring_radius_um, 'wg_type': wg_type, 'h_slab': h_slab, 'w_slab': w_slab,
         'include_metal': include_metal, 'metal_type': metal_type, 'metal_thick_um': metal_thick_um,
-        'metal_width_um': metal_width_um, 'metal_offset_um': metal_offset_um,
+        'metal_width_um': metal_width_um, 'metal_offset_um': metal_offset_um, 'metal_gap_um': metal_gap_um,
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice,
         'te_modes': [], 'tm_modes': []
     }
@@ -399,6 +402,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         m_thick = p_dict.get('Metal Thickness', 0.10)
         m_width = p_dict.get('Metal Width', 2.0)
         m_offset = p_dict.get('Metal Offset', 0.0)
+        m_gap = p_dict.get('Metal Gap', 1.0)
         
         res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
         res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
@@ -409,7 +413,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             lam_curr, res_mode, core_material, pol_choice,
             search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius,
             wg_type=wg_type, h_slab=h_slab, w_slab=w_slab,
-            include_metal=inc_metal, metal_type=m_type, metal_thick_um=m_thick, metal_width_um=m_width, metal_offset_um=m_offset
+            include_metal=inc_metal, metal_type=m_type, metal_thick_um=m_thick, metal_width_um=m_width, metal_offset_um=m_offset, metal_gap_um=m_gap
         )
         
         if i in sample_indices:
@@ -493,6 +497,7 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             m_thick = p_dict.get('Metal Thickness', 0.10)
             m_width = p_dict.get('Metal Width', 2.0)
             m_offset = p_dict.get('Metal Offset', 0.0)
+            m_gap = p_dict.get('Metal Gap', 1.0)
             
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
@@ -500,7 +505,7 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
                 p_dict['Wavelength'], res_mode, core_material, pol_choice,
                 search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius,
                 wg_type=wg_type, h_slab=h_slab, w_slab=w_slab,
-                include_metal=inc_metal, metal_type=m_type, metal_thick_um=m_thick, metal_width_um=m_width, metal_offset_um=m_offset
+                include_metal=inc_metal, metal_type=m_type, metal_thick_um=m_thick, metal_width_um=m_width, metal_offset_um=m_offset, metal_gap_um=m_gap
             )
             
             if (j == 0 and i == 0):
