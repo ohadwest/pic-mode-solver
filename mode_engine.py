@@ -42,15 +42,10 @@ def get_core_index(lam_um, material_name):
     elif material_name == "Si (Silicon)": return n_silicon(lam_um)
     else: return n_sin_stoch(lam_um)
 
-# --- TRAPEZOIDAL MESH GENERATION ---
+# --- MESH GENERATION ---
 
-def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, sidewall_angle_deg=90.0):
-    # Calculate bottom width based on sidewall angle (deg)
-    angle_rad = np.radians(np.clip(sidewall_angle_deg, 1.0, 90.0))
-    w_bottom = w_core + (2.0 * h_core / np.tan(angle_rad)) if sidewall_angle_deg < 89.9 else w_core
-    
-    max_w = max(w_core, w_bottom)
-    total_width = max_w + 2 * side_margin
+def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad):
+    total_width = w_core + 2 * side_margin
     total_height = bottom_ox + h_core + top_ox + 1.5
     
     nx = int(np.round(total_width / dx)) + 1
@@ -64,19 +59,10 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     
     eps = np.full((len(xc), len(yc)), n_clad**2)
     
+    x_min, x_max = -w_core / 2.0, w_core / 2.0
     y_min, y_max = bottom_ox, bottom_ox + h_core
-    
-    # Vectorized trapezoidal core mask
-    XC, YC = np.meshgrid(xc, yc, indexing='ij')
-    in_height = (YC >= y_min) & (YC <= y_max)
-    
-    if sidewall_angle_deg >= 89.9:
-        half_w_y = w_core / 2.0
-    else:
-        # Width expands linearly from top to bottom
-        half_w_y = (w_core / 2.0) + (y_max - YC) / np.tan(angle_rad)
-        
-    core_mask = in_height & (np.abs(XC) <= half_w_y)
+    core_mask = (xc[:, None] >= x_min) & (xc[:, None] <= x_max) & \
+                (yc[None, :] >= y_min) & (yc[None, :] <= y_max)
     eps[core_mask] = n_core**2
     
     interface_y = bottom_ox + h_core + top_ox
@@ -85,9 +71,7 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     
     air_mask = np.repeat(air_mask_1d[None, :], len(xc), axis=0)
     
-    x_min, x_max = -w_bottom / 2.0, w_bottom / 2.0
-    
-    return xc, yc, eps, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom
+    return xc, yc, eps, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max
 
 # --- 2D SVFD EIGENMODE SOLVER ---
 
@@ -162,19 +146,18 @@ def calc_fwhm(vec, profile):
     return 0.0
 
 # --- SINGLE POINT SOLVER ---
-def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, sidewall_angle_deg=90.0):
+def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False):
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
     n_core = get_core_index(lam_um, core_material)
     n_clad = sellmeier_sio2(lam_um)
     
-    xc, yc, eps_mesh, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom = build_advanced_mesh(
-        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg
+    xc, yc, eps_mesh, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max = build_advanced_mesh(
+        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad
     )
     
     res = {
-        'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh, 'core_mask': core_mask,
+        'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh,
         'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max,
-        'w_top': w_core, 'w_bottom': w_bottom, 'sidewall_angle_deg': sidewall_angle_deg,
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice,
         'te_modes': [], 'tm_modes': []
     }
@@ -256,8 +239,6 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         p_dict[param_name] = val
         
         lam_curr = p_dict['Wavelength']
-        sidewall_angle = p_dict.get('Sidewall Angle', 90.0)
-        
         res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
         res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
         
@@ -265,7 +246,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             p_dict['Waveguide Width'], p_dict['Waveguide Height'],
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
             lam_curr, res_mode, core_material, pol_choice,
-            search_higher_modes=False, sidewall_angle_deg=sidewall_angle
+            search_higher_modes=False
         )
         
         if i in sample_indices:
@@ -286,6 +267,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             res['gamma_air_tm'][i] = m0['gamma_air']
             res['a_eff_tm'][i] = m0['a_eff']
 
+    # Group index (ng) & Dispersion (D) calculation for Wavelength sweep
     if param_name == "Wavelength" and n_pts >= 3:
         dlam = (param_vec[-1] - param_vec[0]) / (n_pts - 1)
         c_speed = 299792458.0
@@ -330,13 +312,11 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             p_dict[param1_name] = val1
             p_dict[param2_name] = val2
             
-            sidewall_angle = p_dict.get('Sidewall Angle', 90.0)
-            
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
                 p_dict['Wavelength'], res_mode, core_material, pol_choice,
-                search_higher_modes=False, sidewall_angle_deg=sidewall_angle
+                search_higher_modes=False
             )
             
             if (j == 0 and i == 0):
