@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: mode_engine.py
-# Version: v2.1.0 (Advanced Edition - Multi-Method Bending Loss & Convergence)
+# Version: v2.2.0 (Advanced Edition - Rib Waveguide & Bending Loss Support)
 # Date: August 2026
-# Description: Integrated Method 1 (Caustic Tail Integration) and Method 3 (Marcuse Analytical) for Bending Loss & R_min evaluation.
+# Description: Added Rib Waveguide geometry (Slab height & width) along with Bending Loss evaluation.
 # ==============================================================================
 
 import numpy as np
@@ -49,15 +49,23 @@ def get_core_index(lam_um, material_name):
     elif material_name == "Si (Silicon)": return n_silicon(lam_um)
     else: return n_sin_stoch(lam_um)
 
-# --- TRAPEZOIDAL & BENDED MESH GENERATION ---
+# --- TRAPEZOIDAL, RIB & BENDED MESH GENERATION ---
 
-def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, sidewall_angle_deg=90.0, ring_radius_um=0.0):
+def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, 
+                        sidewall_angle_deg=90.0, ring_radius_um=0.0,
+                        wg_type="Strip", h_slab=0.0, w_slab=0.0):
+    
     angle_rad = np.radians(np.clip(sidewall_angle_deg, 1.0, 90.0))
     w_bottom = w_core + (2.0 * h_core / np.tan(angle_rad)) if sidewall_angle_deg < 89.9 else w_core
     
-    max_w = max(w_core, w_bottom)
+    if wg_type == "Rib":
+        max_w = max(w_core, w_bottom, w_slab)
+        total_height = bottom_ox + h_slab + h_core + top_ox + 1.5
+    else:
+        max_w = max(w_core, w_bottom)
+        total_height = bottom_ox + h_core + top_ox + 1.5
+        
     total_width = max_w + 2 * side_margin
-    total_height = bottom_ox + h_core + top_ox + 1.5
     
     nx = int(np.round(total_width / dx)) + 1
     ny = int(np.round(total_height / dy)) + 1
@@ -69,25 +77,49 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     yc = 0.5 * (y[:-1] + y[1:])
     
     eps = np.full((len(xc), len(yc)), n_clad**2)
-    
-    y_min, y_max = bottom_ox, bottom_ox + h_core
-    
     XC, YC = np.meshgrid(xc, yc, indexing='ij')
-    in_height = (YC >= y_min) & (YC <= y_max)
     
-    if sidewall_angle_deg >= 89.9:
-        half_w_y = w_core / 2.0
-    else:
-        half_w_y = (w_core / 2.0) + (y_max - YC) / np.tan(angle_rad)
+    if wg_type == "Rib":
+        # 1. Base Slab Region
+        y_slab_min = bottom_ox
+        y_slab_max = bottom_ox + h_slab
+        slab_mask = (YC >= y_slab_min) & (YC <= y_slab_max) & (np.abs(XC) <= (w_slab / 2.0))
+        eps[slab_mask] = n_core**2
         
-    core_mask = in_height & (np.abs(XC) <= half_w_y)
-    eps[core_mask] = n_core**2
-    
-    interface_y = bottom_ox + h_core + top_ox
+        # 2. Rib Core Region (sitting on top of Slab)
+        y_core_min = y_slab_max
+        y_core_max = y_slab_max + h_core
+        in_core_height = (YC >= y_core_min) & (YC <= y_core_max)
+        
+        if sidewall_angle_deg >= 89.9:
+            half_w_y = w_core / 2.0
+        else:
+            half_w_y = (w_core / 2.0) + (y_core_max - YC) / np.tan(angle_rad)
+            
+        core_mask_upper = in_core_height & (np.abs(XC) <= half_w_y)
+        eps[core_mask_upper] = n_core**2
+        
+        core_mask = slab_mask | core_mask_upper
+        interface_y = bottom_ox + h_slab + h_core + top_ox
+        y_min, y_max = bottom_ox, y_core_max
+        
+    else: # Strip Waveguide
+        y_min, y_max = bottom_ox, bottom_ox + h_core
+        in_height = (YC >= y_min) & (YC <= y_max)
+        
+        if sidewall_angle_deg >= 89.9:
+            half_w_y = w_core / 2.0
+        else:
+            half_w_y = (w_core / 2.0) + (y_max - YC) / np.tan(angle_rad)
+            
+        core_mask = in_height & (np.abs(XC) <= half_w_y)
+        eps[core_mask] = n_core**2
+        interface_y = bottom_ox + h_core + top_ox
+
     air_mask_1d = yc > interface_y
     eps[:, air_mask_1d] = 1.0**2  # Air n=1
     
-    # Apply Conformal Index Transformation for Ring Resonator Bending (Yariv / Heiblum method)
+    # Conformal Index Transformation for Ring Resonator Bending
     if ring_radius_um > 0.1:
         conformal_factor = (1.0 + XC / ring_radius_um)**2
         eps = eps * conformal_factor
@@ -161,25 +193,19 @@ def svmodes_2d(lam_um, guess, nmodes, dx, dy, eps_mesh, polarization='ex'):
         
     return phi_modes, neff_vals
 
-# --- HELPER: BENDING LOSS & CONVERGENCE SOLVER (METHOD 1 & METHOD 3) ---
+# --- HELPER: BENDING LOSS & CONVERGENCE SOLVER ---
 
 def calc_bending_loss_methods(neff, n_clad, lam_um, ring_radius_um, xc, yc, field_2d, dx, dy):
-    """
-    Method 1: Caustic Tail Integration
-    Method 3: Marcuse Analytical Approximation for R_min & Loss
-    """
     if ring_radius_um <= 0.1:
         return {'loss_m1': 0.0, 'loss_m3': 0.0, 'r_min_um': 0.0, 'x_rad_um': 0.0, 'converged': True}
 
     k0 = 2.0 * np.pi / lam_um
     delta_n2 = max(neff**2 - n_clad**2, 1e-4)
 
-    # --- Method 3: Marcuse Analytical Formula ---
     r_min_um = (3.0 * lam_um) / (4.0 * np.pi * (delta_n2**1.5))
     arg_m3 = (2.0 / 3.0) * k0 * ring_radius_um * (delta_n2**1.5) / (neff**2)
     loss_m3 = 500.0 * (lam_um / ring_radius_um) * np.exp(-arg_m3)
 
-    # --- Method 1: Caustic Tail Power Integration ---
     x_rad = ring_radius_um * ((neff / n_clad) - 1.0) if neff > n_clad else 0.0
     
     XC, _ = np.meshgrid(xc, yc, indexing='ij')
@@ -192,7 +218,6 @@ def calc_bending_loss_methods(neff, n_clad, lam_um, ring_radius_um, xc, yc, fiel
     gamma = k0 * np.sqrt(delta_n2)
     loss_m1 = 4.343 * 2.0 * gamma * tail_fraction * 1e4
 
-    # Check convergence between Method 1 and Method 3
     rel_diff = abs(loss_m1 - loss_m3) / max(loss_m1, loss_m3, 1e-3)
     converged = bool(rel_diff < 0.35 or (loss_m1 < 0.1 and loss_m3 < 0.1))
 
@@ -213,27 +238,27 @@ def calc_fwhm(vec, profile):
 
 # --- SINGLE POINT SOLVER ---
 
-def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, sidewall_angle_deg=90.0, ring_radius_um=0.0):
+def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, sidewall_angle_deg=90.0, ring_radius_um=0.0, wg_type="Strip", h_slab=0.0, w_slab=0.0):
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
     n_core = get_core_index(lam_um, core_material)
     n_clad = sellmeier_sio2(lam_um)
     
     xc, yc, eps_mesh, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom = build_advanced_mesh(
-        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg, ring_radius_um
+        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg, ring_radius_um, wg_type, h_slab, w_slab
     )
     
     res = {
         'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh, 'core_mask': core_mask,
         'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max,
         'w_top': w_core, 'w_bottom': w_bottom, 'sidewall_angle_deg': sidewall_angle_deg,
-        'ring_radius_um': ring_radius_um,
+        'ring_radius_um': ring_radius_um, 'wg_type': wg_type, 'h_slab': h_slab, 'w_slab': w_slab,
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice,
         'te_modes': [], 'tm_modes': []
     }
     
     max_search_modes = 8 if search_higher_modes else 1
     
-    mid_y_idx = np.argmin(np.abs(yc - (bottom_ox + h_core / 2.0)))
+    mid_y_idx = np.argmin(np.abs(yc - (bottom_ox + (h_slab + h_core) / 2.0)))
     mid_x_idx = len(xc) // 2
     
     if pol_choice in ["TE", "Both (TE & TM)"]:
@@ -320,6 +345,9 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         lam_curr = p_dict['Wavelength']
         sidewall_angle = p_dict.get('Sidewall Angle', 90.0)
         ring_radius = p_dict.get('Ring Radius', 0.0)
+        wg_type = p_dict.get('Profile Type', 'Strip')
+        h_slab = p_dict.get('Slab Height', 0.0)
+        w_slab = p_dict.get('Slab Width', 0.0)
         
         res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
         res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
@@ -328,7 +356,8 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             p_dict['Waveguide Width'], p_dict['Waveguide Height'],
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
             lam_curr, res_mode, core_material, pol_choice,
-            search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius
+            search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius,
+            wg_type=wg_type, h_slab=h_slab, w_slab=w_slab
         )
         
         if i in sample_indices:
@@ -402,29 +431,17 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             
             sidewall_angle = p_dict.get('Sidewall Angle', 90.0)
             ring_radius = p_dict.get('Ring Radius', 0.0)
+            wg_type = p_dict.get('Profile Type', 'Strip')
+            h_slab = p_dict.get('Slab Height', 0.0)
+            w_slab = p_dict.get('Slab Width', 0.0)
             
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
                 p_dict['Wavelength'], res_mode, core_material, pol_choice,
-                search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius
+                search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius,
+                wg_type=wg_type, h_slab=h_slab, w_slab=w_slab
             )
             
             if (j == 0 and i == 0):
-                res['sample_points']['Min'] = {'p1': val1, 'p2': val2, 'res': sp_res}
-            elif (j == mid_j and i == mid_i):
-                res['sample_points']['Mid'] = {'p1': val1, 'p2': val2, 'res': sp_res}
-            elif (j == n2 - 1 and i == n1 - 1):
-                res['sample_points']['Max'] = {'p1': val1, 'p2': val2, 'res': sp_res}
-            
-            if len(sp_res['te_modes']) > 0:
-                res['neff_te'][j, i] = sp_res['te_modes'][0]['neff']
-                res['gamma_core_te'][j, i] = sp_res['te_modes'][0]['gamma_core']
-                res['gamma_air_te'][j, i] = sp_res['te_modes'][0]['gamma_air']
-                
-            if len(sp_res['tm_modes']) > 0:
-                res['neff_tm'][j, i] = sp_res['tm_modes'][0]['neff']
-                res['gamma_core_tm'][j, i] = sp_res['tm_modes'][0]['gamma_core']
-                res['gamma_air_tm'][j, i] = sp_res['tm_modes'][0]['gamma_air']
-                
-    return res
+                res['sample_points']['Min'] = {'p1': val1, 'p2': val2, 'res
