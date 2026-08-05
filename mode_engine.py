@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: mode_engine.py
-# Version: v2.2.0 (Advanced Edition - Rib Waveguide & Bending Loss Support)
+# Version: v2.2.1 (Advanced Edition - Syntax Fixed)
 # Date: August 2026
-# Description: Added Rib Waveguide geometry (Slab height & width) along with Bending Loss evaluation.
+# Description: Fixed all string escape sequences and syntax for Python 3.12+.
 # ==============================================================================
 
 import numpy as np
@@ -80,13 +80,11 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     XC, YC = np.meshgrid(xc, yc, indexing='ij')
     
     if wg_type == "Rib":
-        # 1. Base Slab Region
         y_slab_min = bottom_ox
         y_slab_max = bottom_ox + h_slab
         slab_mask = (YC >= y_slab_min) & (YC <= y_slab_max) & (np.abs(XC) <= (w_slab / 2.0))
         eps[slab_mask] = n_core**2
         
-        # 2. Rib Core Region (sitting on top of Slab)
         y_core_min = y_slab_max
         y_core_max = y_slab_max + h_core
         in_core_height = (YC >= y_core_min) & (YC <= y_core_max)
@@ -119,7 +117,6 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     air_mask_1d = yc > interface_y
     eps[:, air_mask_1d] = 1.0**2  # Air n=1
     
-    # Conformal Index Transformation for Ring Resonator Bending
     if ring_radius_um > 0.1:
         conformal_factor = (1.0 + XC / ring_radius_um)**2
         eps = eps * conformal_factor
@@ -444,4 +441,20 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             )
             
             if (j == 0 and i == 0):
-                res['sample_points']['Min'] = {'p1': val1, 'p2': val2, 'res
+                res['sample_points']['Min'] = {'p1': val1, 'p2': val2, 'res': sp_res}
+            elif (j == mid_j and i == mid_i):
+                res['sample_points']['Mid'] = {'p1': val1, 'p2': val2, 'res': sp_res}
+            elif (j == n2 - 1 and i == n1 - 1):
+                res['sample_points']['Max'] = {'p1': val1, 'p2': val2, 'res': sp_res}
+            
+            if len(sp_res['te_modes']) > 0:
+                res['neff_te'][j, i] = sp_res['te_modes'][0]['neff']
+                res['gamma_core_te'][j, i] = sp_res['te_modes'][0]['gamma_core']
+                res['gamma_air_te'][j, i] = sp_res['te_modes'][0]['gamma_air']
+                
+            if len(sp_res['tm_modes']) > 0:
+                res['neff_tm'][j, i] = sp_res['tm_modes'][0]['neff']
+                res['gamma_core_tm'][j, i] = sp_res['tm_modes'][0]['gamma_core']
+                res['gamma_air_tm'][j, i] = sp_res['tm_modes'][0]['gamma_air']
+                
+    return res
