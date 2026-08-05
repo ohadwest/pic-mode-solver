@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: app.py
-# Version: v2.1.0 (Advanced Edition - Bending Loss Convergence & Multi-Method)
+# Version: v2.2.0 (Advanced Edition - Rib Waveguide & Bending Support)
 # Date: August 2026
-# Description: Added Method 1 (Caustic Tail Integration) and Method 3 (Marcuse Analytical) comparison for Ring Resonator bending loss.
+# Description: Added Rib Waveguide parameters (Slab height/width), trapezoidal sidewalls, and bending loss convergence.
 # ==============================================================================
 
 import streamlit as st
@@ -48,7 +48,7 @@ def inject_google_analytics(measurement_id):
 inject_google_analytics("G-7776KX662W")
 
 st.title("⚡ Universal Waveguide Core & Air Confinement Solver (Advanced Edition)")
-st.markdown("### Ring Resonators (Multi-Method Bending Loss & Convergence Analysis)")
+st.markdown("### Strip & Rib Waveguides, Bending Losses (M1/M3) & PDF Export")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
@@ -91,15 +91,25 @@ def display_fig_with_download(fig, filename, key_unique):
         key=key_unique
     )
 
-# --- HELPER FUNCTION: DRAW TRAPEZOID OUTLINE ON MATPLOTLIB AXIS ---
+# --- HELPER FUNCTION: DRAW STRIP OR RIB CORE OUTLINE ON MATPLOTLIB AXIS ---
 def draw_core_outline(ax, sp_r):
+    wg_type = sp_r.get('wg_type', 'Strip')
     w_top = sp_r.get('w_top', 1.5)
     w_bot = sp_r.get('w_bottom', w_top)
     y_min, y_max = sp_r['y_min'], sp_r['y_max']
+    h_slab = sp_r.get('h_slab', 0.0)
+    w_slab = sp_r.get('w_slab', 0.0)
     
-    x_coords = [-w_bot / 2.0, w_bot / 2.0, w_top / 2.0, -w_top / 2.0, -w_bot / 2.0]
-    y_coords = [y_min, y_min, y_max, y_max, y_min]
-    
+    if wg_type == "Rib" and h_slab > 0:
+        y_slab_top = y_min + h_slab
+        # Outline for Rib + Slab
+        x_coords = [-w_slab/2, w_slab/2, w_slab/2, w_bot/2, w_top/2, -w_top/2, -w_bot/2, -w_slab/2, -w_slab/2]
+        y_coords = [y_min, y_min, y_slab_top, y_slab_top, y_max, y_max, y_slab_top, y_slab_top, y_min]
+    else:
+        # Standard Strip Outline
+        x_coords = [-w_bot / 2.0, w_bot / 2.0, w_top / 2.0, -w_top / 2.0, -w_bot / 2.0]
+        y_coords = [y_min, y_min, y_max, y_max, y_min]
+        
     ax.plot(x_coords, y_coords, 'w--', lw=1.5, label='Core Boundary')
 
 # --- HELPER FUNCTION: GENERATE PDF REPORT ---
@@ -137,7 +147,7 @@ def create_pdf_report(title, summary_dict, figs_dict):
     story.append(Paragraph("2. Governing Physical Equations", h2_style))
     eq_text = """
     <b>Effective Index:</b> n_clad &lt; n_eff &lt; n_core <br/>
-    <b>Bending Index Transformation:</b> n_bend(x,y) = n(x,y) &times; (1 + x/R) <br/>
+    <b>Conformal Mapping Transformation:</b> n_bend(x,y) = n(x,y) &times; (1 + x/R) <br/>
     <b>Confinement Factor:</b> &Gamma;_Core = &iint;_Core |E|&sup2; dx dy / &iint;_Total |E|&sup2; dx dy &times; 100% <br/>
     <b>Bending Loss (M1 - Caustic Tail):</b> Derived from tail power beyond x_rad = R &times; (n_eff/n_clad - 1) <br/>
     <b>Bending Loss (M3 - Marcuse):</b> &alpha; &propto; exp(-2/3 k0 R &Delta;n&sup3;&frasl;&sup2; / n_eff&sup2;)
@@ -214,11 +224,20 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
 # --- MODE 1: SINGLE POINT ANALYSIS ---
 # ==============================================================================
 if analysis_type == "Single Point Analysis":
-    st.sidebar.header("🛠️ Geometry & Bending")
-    wg_type = st.sidebar.radio("Waveguide Geometry", options=["Straight Waveguide", "Ring Resonator (Bended)"], index=0)
+    st.sidebar.header("🛠️ Geometry & Waveguide Profile")
+    wg_profile_type = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=0)
+    
+    h_slab_val = 0.0
+    w_slab_val = 0.0
+    if wg_profile_type == "Rib":
+        c_s1, c_s2 = st.sidebar.columns(2)
+        h_slab_val = c_s1.number_input("Slab Height [μm]", value=0.09, step=0.01)
+        w_slab_val = c_s2.number_input("Slab Width [μm]", value=3.0, step=0.2)
+        
+    wg_geo_type = st.sidebar.radio("Waveguide Path", options=["Straight Waveguide", "Ring Resonator (Bended)"], index=0)
     
     ring_radius_val = 0.0
-    if wg_type == "Ring Resonator (Bended)":
+    if wg_geo_type == "Ring Resonator (Bended)":
         ring_radius_val = st.sidebar.number_input("Ring Radius R [μm]", value=10.0, min_value=1.0, max_value=500.0, step=1.0)
     
     w_core = st.sidebar.number_input("Waveguide Top Width [μm]", value=1.5, step=0.1)
@@ -236,7 +255,11 @@ if analysis_type == "Single Point Analysis":
     if run_sp_btn or 'sp_results' in st.session_state:
         if run_sp_btn:
             with st.spinner("Solving optical wave equations..."):
-                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes, sidewall_angle, ring_radius_val)
+                res = run_single_point(
+                    w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice,
+                    search_higher_modes, sidewall_angle, ring_radius_val,
+                    wg_type=wg_profile_type, h_slab=h_slab_val, w_slab=w_slab_val
+                )
                 st.session_state['sp_results'] = res
 
         r = st.session_state['sp_results']
@@ -280,7 +303,7 @@ if analysis_type == "Single Point Analysis":
 
         # TAB 0: Refractive Index Profile
         with tabs[tab_idx]:
-            st.subheader(f"Cross-Sectional Refractive Index Distribution n(x,y) - {core_material}")
+            st.subheader(f"Cross-Sectional Refractive Index Distribution n(x,y) - {core_material} ({r['wg_type']} WG)")
             fig_idx_prof, ax_idx_prof = plt.subplots(figsize=(7, 4))
             n_mesh = np.sqrt(r['eps_mesh'])
             im_n = ax_idx_prof.imshow(n_mesh.T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='viridis', aspect='auto')
@@ -364,7 +387,7 @@ if analysis_type == "Single Point Analysis":
                 ax_cx.axvline(0, color='k', linestyle=':', label='Center (x=0)')
                 ax_cx.grid(True); ax_cx.legend()
                 ax_cx.set_xlabel('Horizontal Position X [μm]'); ax_cx.set_ylabel('Normalized Field Intensity')
-                ax_cx.set_title("Horizontal Cutline (Notice Shift for Bending)")
+                ax_cx.set_title("Horizontal Cutline")
                 display_fig_with_download(fig_cx, "horizontal_cutline_1d.png", "sp_cut_x")
                 figs_for_pdf["1D Horizontal Cutline"] = fig_cx
 
@@ -398,7 +421,10 @@ if analysis_type == "Single Point Analysis":
         
         summary_info = {
             "Core Material": core_material,
-            "Geometry Type": "Ring Resonator" if ring_radius_val > 0.1 else "Straight Waveguide",
+            "Waveguide Profile": wg_profile_type,
+            "Slab Height [μm]": f"{h_slab_val:.3f}" if wg_profile_type=="Rib" else "N/A",
+            "Slab Width [μm]": f"{w_slab_val:.3f}" if wg_profile_type=="Rib" else "N/A",
+            "Geometry Path": "Ring Resonator" if ring_radius_val > 0.1 else "Straight Waveguide",
             "Ring Radius [μm]": f"{ring_radius_val:.1f}" if ring_radius_val > 0.1 else "Infinity (Straight)",
             "Wavelength [μm]": lam_um,
             "Top Width [μm]": w_core,
@@ -441,11 +467,11 @@ if analysis_type == "Single Point Analysis":
 # ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
-    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
+    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Slab Height", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
     axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=3)
 
-    def_min = 1.50 if axis_1d == "Wavelength" else (5.0 if axis_1d == "Ring Radius" else (60.0 if axis_1d == "Sidewall Angle" else (0.6 if axis_1d == "Waveguide Width" else 0.2)))
-    def_max = 1.60 if axis_1d == "Wavelength" else (50.0 if axis_1d == "Ring Radius" else (90.0 if axis_1d == "Sidewall Angle" else (1.8 if axis_1d == "Waveguide Width" else 0.6)))
+    def_min = 1.50 if axis_1d == "Wavelength" else (0.05 if axis_1d == "Slab Height" else (5.0 if axis_1d == "Ring Radius" else (60.0 if axis_1d == "Sidewall Angle" else (0.6 if axis_1d == "Waveguide Width" else 0.2))))
+    def_max = 1.60 if axis_1d == "Wavelength" else (0.20 if axis_1d == "Slab Height" else (50.0 if axis_1d == "Ring Radius" else (90.0 if axis_1d == "Sidewall Angle" else (1.8 if axis_1d == "Waveguide Width" else 0.6))))
     def_pts = 11
 
     c_min, c_max, c_pts = st.sidebar.columns(3)
@@ -456,9 +482,19 @@ elif analysis_type == "1D Parametric Sweep":
     rem_params_1d = [p for p in param_options if p != axis_1d]
     fixed_dict_1d = {}
     st.sidebar.markdown("**Fixed Parameters:**")
+    
+    profile_choice_1d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=1 if axis_1d=="Slab Height" else 0)
+    fixed_dict_1d["Profile Type"] = profile_choice_1d
+    
     for p in rem_params_1d:
-        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (10.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
-        fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
+        if p == "Slab Height":
+            fixed_dict_1d[p] = st.sidebar.number_input("Slab Height (Fixed) [μm]", value=0.09)
+        elif p == "Slab Width":
+            fixed_dict_1d[p] = st.sidebar.number_input("Slab Width (Fixed) [μm]", value=3.0)
+        else:
+            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
+            fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
+            
     fixed_dict_1d["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
     run_1d_btn = st.sidebar.button("🚀 Run 1D Sweep", type="primary", use_container_width=True)
@@ -623,28 +659,38 @@ elif analysis_type == "1D Parametric Sweep":
 # ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
-    param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
-    axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=2)
+    param_options = ["Waveguide Width", "Waveguide Height", "Slab Height", "Wavelength", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
+    axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=3)
     axis_y = st.sidebar.selectbox("Second Scan Axis (Y)", options=[p for p in param_options if p != axis_x], index=0)
 
     st.sidebar.markdown(f"**Axis X ({axis_x}) Range:**")
     cx_min, cx_max, cx_pts = st.sidebar.columns(3)
-    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else (5.0 if axis_x=="Ring Radius" else (60.0 if axis_x=="Sidewall Angle" else 0.6)), key="vx_min")
-    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else (50.0 if axis_x=="Ring Radius" else (90.0 if axis_x=="Sidewall Angle" else 1.8)), key="vx_max")
+    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else (0.05 if axis_x=="Slab Height" else (5.0 if axis_x=="Ring Radius" else (60.0 if axis_x=="Sidewall Angle" else 0.6))), key="vx_min")
+    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else (0.20 if axis_x=="Slab Height" else (50.0 if axis_x=="Ring Radius" else (90.0 if axis_x=="Sidewall Angle" else 1.8))), key="vx_max")
     nx_pts = cx_pts.number_input("Pts X", value=7, min_value=3, max_value=21, key="nx_pts")
 
     st.sidebar.markdown(f"**Axis Y ({axis_y}) Range:**")
     cy_min, cy_max, cy_pts = st.sidebar.columns(3)
-    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (5.0 if axis_y=="Ring Radius" else (60.0 if axis_y=="Sidewall Angle" else 0.6)), key="vy_min")
-    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (50.0 if axis_y=="Ring Radius" else (90.0 if axis_y=="Sidewall Angle" else 1.8)), key="vy_max")
+    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (0.05 if axis_y=="Slab Height" else (5.0 if axis_y=="Ring Radius" else (60.0 if axis_y=="Sidewall Angle" else 0.6))), key="vy_min")
+    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (0.20 if axis_y=="Slab Height" else (50.0 if axis_y=="Ring Radius" else (90.0 if axis_y=="Sidewall Angle" else 1.8))), key="vy_max")
     ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
 
     remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
     fixed_dict = {}
     st.sidebar.markdown("**Fixed Parameters:**")
+    
+    profile_choice_2d = st.sidebar.selectbox("Profile Type", options=["Strip", "Rib"], index=1 if "Slab Height" in [axis_x, axis_y] else 0)
+    fixed_dict["Profile Type"] = profile_choice_2d
+    
     for p in remaining_params:
-        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (10.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
-        fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
+        if p == "Slab Height":
+            fixed_dict[p] = st.sidebar.number_input("Slab Height (Fixed) [μm]", value=0.09)
+        elif p == "Slab Width":
+            fixed_dict[p] = st.sidebar.number_input("Slab Width (Fixed) [μm]", value=3.0)
+        else:
+            def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
+            fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
+            
     fixed_dict["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
     run_2d_btn = st.sidebar.button("🚀 Run 2D Confinement Sweep", type="primary", use_container_width=True)
