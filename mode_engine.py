@@ -1,8 +1,8 @@
 # ==============================================================================
 # File: mode_engine.py
-# Version: v1.2.0 (Standard Rectangular Edition + Custom Material Support)
+# Version: v1.2.1 (Standard Rectangular Edition + Custom Material Support Fix)
 # Date: August 2026
-# Description: Added Custom User Defined material support with constant core & clad indices.
+# Description: Fixed run_single_point signature to match custom_n_core & custom_n_clad parameters.
 # ==============================================================================
 
 import numpy as np
@@ -283,7 +283,6 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             res['gamma_air_tm'][i] = m0['gamma_air']
             res['a_eff_tm'][i] = m0['a_eff']
 
-    # Group index (ng) & Dispersion (D) calculation for Wavelength sweep
     if param_name == "Wavelength" and n_pts >= 3:
         dlam = (param_vec[-1] - param_vec[0]) / (n_pts - 1)
         c_speed = 299792458.0
