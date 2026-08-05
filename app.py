@@ -1,3 +1,10 @@
+# ==============================================================================
+# File: app.py
+# Version: v2.0.0 (Advanced Edition - Bending / Ring Resonator Support)
+# Date: August 2026
+# Description: Added Ring Resonator bending simulation using Conformal Index Transformation.
+# ==============================================================================
+
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +23,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 st.set_page_config(
-    page_title="Universal Waveguide Confinement & Mode Solver",
+    page_title="Universal Waveguide Confinement & Mode Solver (Advanced Edition)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -40,8 +47,8 @@ def inject_google_analytics(measurement_id):
 
 inject_google_analytics("G-7776KX662W")
 
-st.title("⚡ Universal Waveguide Core & Air Confinement Solver")
-st.markdown("### Integrated Optics Multi-Mode Solver with Trapezoidal Sidewalls & PDF Export")
+st.title("⚡ Universal Waveguide Core & Air Confinement Solver (Advanced Edition)")
+st.markdown("### Ring Resonators (Bending Loss), Trapezoidal Sidewalls & PDF Export")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
@@ -90,7 +97,6 @@ def draw_core_outline(ax, sp_r):
     w_bot = sp_r.get('w_bottom', w_top)
     y_min, y_max = sp_r['y_min'], sp_r['y_max']
     
-    # Polygon corners: Bottom-Left, Bottom-Right, Top-Right, Top-Left, Bottom-Left
     x_coords = [-w_bot / 2.0, w_bot / 2.0, w_top / 2.0, -w_top / 2.0, -w_bot / 2.0]
     y_coords = [y_min, y_min, y_max, y_max, y_min]
     
@@ -131,9 +137,9 @@ def create_pdf_report(title, summary_dict, figs_dict):
     story.append(Paragraph("2. Governing Physical Equations", h2_style))
     eq_text = """
     <b>Effective Index:</b> n_clad &lt; n_eff &lt; n_core <br/>
+    <b>Bending Index Transformation:</b> n_bend(x,y) = n(x,y) &times; (1 + x/R) <br/>
     <b>Confinement Factor:</b> &Gamma;_Core = &iint;_Core |E|&sup2; dx dy / &iint;_Total |E|&sup2; dx dy &times; 100% <br/>
-    <b>Effective Mode Area:</b> A_eff = (&iint; |E|&sup2; dx dy)&sup2; / &iint; |E|&sup4; dx dy <br/>
-    <b>Mode Field Diameter:</b> MFD = 2 &times; &radic;(A_eff / &pi;)
+    <b>Effective Mode Area:</b> A_eff = (&iint; |E|&sup2; dx dy)&sup2; / &iint; |E|&sup4; dx dy
     """
     story.append(Paragraph(eq_text, body_style))
     story.append(Spacer(1, 12))
@@ -207,10 +213,16 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
 # --- MODE 1: SINGLE POINT ANALYSIS ---
 # ==============================================================================
 if analysis_type == "Single Point Analysis":
-    st.sidebar.header("🛠️ Geometry & Wavelength")
+    st.sidebar.header("🛠️ Geometry & Bending")
+    wg_type = st.sidebar.radio("Waveguide Geometry", options=["Straight Waveguide", "Ring Resonator (Bended)"], index=0)
+    
+    ring_radius_val = 0.0
+    if wg_type == "Ring Resonator (Bended)":
+        ring_radius_val = st.sidebar.number_input("Ring Radius R [μm]", value=10.0, min_value=1.0, max_value=500.0, step=1.0, help="Smaller radius causes higher mode shift & radiation loss.")
+    
     w_core = st.sidebar.number_input("Waveguide Top Width [μm]", value=1.5, step=0.1)
     h_core = st.sidebar.number_input("Waveguide Height [μm]", value=0.4, step=0.05)
-    sidewall_angle = st.sidebar.slider("Sidewall Angle [deg]", min_value=30.0, max_value=90.0, value=90.0, step=1.0, help="90° = Rectangular. 45-80° = Trapezoidal sidewall etch.")
+    sidewall_angle = st.sidebar.slider("Sidewall Angle [deg]", min_value=30.0, max_value=90.0, value=90.0, step=1.0)
     lam_um = st.sidebar.number_input("Wavelength [μm]", value=1.55, step=0.01)
     top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=0.1, step=0.05)
     bottom_ox = st.sidebar.number_input("Oxide Bottom Thickness (BOX) [μm]", value=4.0, step=0.5)
@@ -223,7 +235,7 @@ if analysis_type == "Single Point Analysis":
     if run_sp_btn or 'sp_results' in st.session_state:
         if run_sp_btn:
             with st.spinner("Solving optical wave equations..."):
-                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes, sidewall_angle)
+                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes, sidewall_angle, ring_radius_val)
                 st.session_state['sp_results'] = res
 
         r = st.session_state['sp_results']
@@ -234,8 +246,8 @@ if analysis_type == "Single Point Analysis":
         if len(r['te_modes']) > 0: m3.metric("TE0 n_eff", f"{r['te_modes'][0]['neff']:.4f}")
         if len(r['tm_modes']) > 0: m4.metric("TM0 n_eff", f"{r['tm_modes'][0]['neff']:.4f}")
 
-        if r.get('sidewall_angle_deg', 90.0) < 89.9:
-            st.info(f"📐 **Trapezoidal Profile Active:** Top Width = `{r['w_top']:.3f} μm`, Bottom Width = `{r['w_bottom']:.3f} μm` (Angle = `{r['sidewall_angle_deg']:.1f}°`)")
+        if r.get('ring_radius_um', 0.0) > 0.1:
+            st.warning(f"🌀 **Bended Ring Resonator Active:** Radius $R = {r['ring_radius_um']:.1f}\\,\\mu\\text{{m}}$. Notice the field shift towards the outer sidewall ($x > 0$).")
 
         st.markdown("---")
         
@@ -259,7 +271,7 @@ if analysis_type == "Single Point Analysis":
             n_mesh = np.sqrt(r['eps_mesh'])
             im_n = ax_idx_prof.imshow(n_mesh.T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='viridis', aspect='auto')
             draw_core_outline(ax_idx_prof, r)
-            fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Refractive Index (n)')
+            fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Effective Index Grid n(x,y)')
             ax_idx_prof.set_xlabel('Horizontal Position X [μm]')
             ax_idx_prof.set_ylabel('Vertical Position Y [μm]')
             display_fig_with_download(fig_idx_prof, f"refractive_index_profile_{core_material}.png", "sp_n_prof")
@@ -325,9 +337,10 @@ if analysis_type == "Single Point Analysis":
                 fig_cx, ax_cx = plt.subplots(figsize=(6, 4))
                 if len(r['te_modes']) > 0: ax_cx.plot(r['xc'], r['te_modes'][0]['cut_x'], 'b-', lw=2, label='TE0 (Horizontal)')
                 if len(r['tm_modes']) > 0: ax_cx.plot(r['xc'], r['tm_modes'][0]['cut_x'], 'r--', lw=2, label='TM0 (Horizontal)')
+                ax_cx.axvline(0, color='k', linestyle=':', label='Center (x=0)')
                 ax_cx.grid(True); ax_cx.legend()
                 ax_cx.set_xlabel('Horizontal Position X [μm]'); ax_cx.set_ylabel('Normalized Field Intensity')
-                ax_cx.set_title("Horizontal Cutline (y = y_center)")
+                ax_cx.set_title("Horizontal Cutline (Notice Shift for Bending)")
                 display_fig_with_download(fig_cx, "horizontal_cutline_1d.png", "sp_cut_x")
                 figs_for_pdf["1D Horizontal Cutline"] = fig_cx
 
@@ -347,6 +360,8 @@ if analysis_type == "Single Point Analysis":
             st.markdown("""
             ### 📖 Mathematical Equations & Physical Definitions
             * **Effective Index:** $n_{\\text{clad}} < n_{\\text{eff}} < n_{\\text{core}}$
+            * **Conformal Mapping Index Transformation for Ring Resonant Bending:**
+              $$n_{\\text{bend}}(x, y) = n(x, y) \\cdot \\left(1 + \\frac{x}{R}\\right)$$
             * **Confinement Factor:** $\\Gamma_{\\text{Core}} = \\frac{\\iint_{\\text{Core}} |E|^2 dx dy}{\\iint |E|^2 dx dy} \\times 100\\%$
             * **Effective Area:** $A_{\\text{eff}} = \\frac{\\left( \\iint |E|^2 dx dy \\right)^2}{\\iint |E|^4 dx dy}$
             """)
@@ -358,6 +373,8 @@ if analysis_type == "Single Point Analysis":
         
         summary_info = {
             "Core Material": core_material,
+            "Geometry Type": "Ring Resonator" if ring_radius_val > 0.1 else "Straight Waveguide",
+            "Ring Radius [μm]": f"{ring_radius_val:.1f}" if ring_radius_val > 0.1 else "Infinity (Straight)",
             "Wavelength [μm]": lam_um,
             "Top Width [μm]": w_core,
             "Bottom Width [μm]": f"{r['w_bottom']:.3f}",
@@ -400,23 +417,23 @@ if analysis_type == "Single Point Analysis":
 # ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
-    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Sidewall Angle", "Oxide Top Thickness"]
+    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
     axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=0)
 
-    def_min = 1.50 if axis_1d == "Wavelength" else (60.0 if axis_1d == "Sidewall Angle" else (0.6 if axis_1d == "Waveguide Width" else 0.2))
-    def_max = 1.60 if axis_1d == "Wavelength" else (90.0 if axis_1d == "Sidewall Angle" else (1.8 if axis_1d == "Waveguide Width" else 0.6))
+    def_min = 1.50 if axis_1d == "Wavelength" else (5.0 if axis_1d == "Ring Radius" else (60.0 if axis_1d == "Sidewall Angle" else (0.6 if axis_1d == "Waveguide Width" else 0.2)))
+    def_max = 1.60 if axis_1d == "Wavelength" else (50.0 if axis_1d == "Ring Radius" else (90.0 if axis_1d == "Sidewall Angle" else (1.8 if axis_1d == "Waveguide Width" else 0.6)))
     def_pts = 11
 
     c_min, c_max, c_pts = st.sidebar.columns(3)
-    val_min = c_min.number_input("Min", value=def_min, step=0.05 if axis_1d!="Sidewall Angle" else 5.0)
-    val_max = c_max.number_input("Max", value=def_max, step=0.05 if axis_1d!="Sidewall Angle" else 5.0)
+    val_min = c_min.number_input("Min", value=def_min, step=0.05 if axis_1d not in ["Sidewall Angle", "Ring Radius"] else 1.0)
+    val_max = c_max.number_input("Max", value=def_max, step=0.05 if axis_1d not in ["Sidewall Angle", "Ring Radius"] else 5.0)
     num_pts = c_pts.number_input("Points", value=def_pts, min_value=3, max_value=51, step=2)
 
     rem_params_1d = [p for p in param_options if p != axis_1d]
     fixed_dict_1d = {}
     st.sidebar.markdown("**Fixed Parameters:**")
     for p in rem_params_1d:
-        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1)))
+        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
         fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
     fixed_dict_1d["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
@@ -558,27 +575,27 @@ elif analysis_type == "1D Parametric Sweep":
 # ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
-    param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Sidewall Angle", "Oxide Top Thickness"]
+    param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Ring Radius", "Sidewall Angle", "Oxide Top Thickness"]
     axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=2)
     axis_y = st.sidebar.selectbox("Second Scan Axis (Y)", options=[p for p in param_options if p != axis_x], index=0)
 
     st.sidebar.markdown(f"**Axis X ({axis_x}) Range:**")
     cx_min, cx_max, cx_pts = st.sidebar.columns(3)
-    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else (60.0 if axis_x=="Sidewall Angle" else 0.6), key="vx_min")
-    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else (90.0 if axis_x=="Sidewall Angle" else 1.8), key="vx_max")
+    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else (5.0 if axis_x=="Ring Radius" else (60.0 if axis_x=="Sidewall Angle" else 0.6)), key="vx_min")
+    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else (50.0 if axis_x=="Ring Radius" else (90.0 if axis_x=="Sidewall Angle" else 1.8)), key="vx_max")
     nx_pts = cx_pts.number_input("Pts X", value=7, min_value=3, max_value=21, key="nx_pts")
 
     st.sidebar.markdown(f"**Axis Y ({axis_y}) Range:**")
     cy_min, cy_max, cy_pts = st.sidebar.columns(3)
-    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (60.0 if axis_y=="Sidewall Angle" else 0.6), key="vy_min")
-    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (90.0 if axis_y=="Sidewall Angle" else 1.8), key="vy_max")
+    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (5.0 if axis_y=="Ring Radius" else (60.0 if axis_y=="Sidewall Angle" else 0.6)), key="vy_min")
+    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (50.0 if axis_y=="Ring Radius" else (90.0 if axis_y=="Sidewall Angle" else 1.8)), key="vy_max")
     ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
 
     remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
     fixed_dict = {}
     st.sidebar.markdown("**Fixed Parameters:**")
     for p in remaining_params:
-        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1)))
+        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (0.0 if p=="Ring Radius" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1))))
         fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
     fixed_dict["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
