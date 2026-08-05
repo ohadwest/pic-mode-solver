@@ -1,3 +1,10 @@
+# ==============================================================================
+# File: mode_engine.py
+# Version: v1.2.0 (Standard Rectangular Edition + Custom Material Support)
+# Date: August 2026
+# Description: Added Custom User Defined material support with constant core & clad indices.
+# ==============================================================================
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -35,14 +42,15 @@ def n_silicon(lam_um):
                  (1.54133408 * lam_um**2) / (lam_um**2 - 1104.0**2)
     return np.sqrt(np.maximum(n_sq, 1.0))
 
-def get_core_index(lam_um, material_name):
+def get_core_index(lam_um, material_name, custom_n_core=2.0):
     if material_name == "Si3N4 (Stoichiometric)": return n_sin_stoch(lam_um)
     elif material_name == "SiN (Low Stress)": return n_sin_lowstress(lam_um)
     elif material_name == "Al2O3 (Alumina)": return n_al2o3(lam_um)
     elif material_name == "Si (Silicon)": return n_silicon(lam_um)
+    elif material_name == "Custom (User Defined)": return float(custom_n_core)
     else: return n_sin_stoch(lam_um)
 
-# --- MESH GENERATION ---
+# --- RECTANGULAR MESH GENERATION ---
 
 def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad):
     total_width = w_core + 2 * side_margin
@@ -146,19 +154,21 @@ def calc_fwhm(vec, profile):
     return 0.0
 
 # --- SINGLE POINT SOLVER ---
-def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False):
+def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, custom_n_core=2.0, custom_n_clad=1.444):
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
-    n_core = get_core_index(lam_um, core_material)
-    n_clad = sellmeier_sio2(lam_um)
+    
+    n_core = get_core_index(lam_um, core_material, custom_n_core)
+    n_clad = float(custom_n_clad) if core_material == "Custom (User Defined)" else sellmeier_sio2(lam_um)
     
     xc, yc, eps_mesh, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max = build_advanced_mesh(
         w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad
     )
     
     res = {
-        'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh,
+        'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh, 'core_mask': core_mask,
         'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max,
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice,
+        'n_core_used': n_core, 'n_clad_used': n_clad,
         'te_modes': [], 'tm_modes': []
     }
     
@@ -239,14 +249,20 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         p_dict[param_name] = val
         
         lam_curr = p_dict['Wavelength']
-        res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
-        res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
+        custom_nc = p_dict.get('Custom Core Index', 2.0)
+        custom_ncl = p_dict.get('Custom Clad Index', 1.444)
+        
+        n_c_val = get_core_index(lam_curr, core_material, custom_nc)
+        n_cl_val = float(custom_ncl) if core_material == "Custom (User Defined)" else sellmeier_sio2(lam_curr)
+        
+        res['n_core_vec'][i] = n_c_val
+        res['n_clad_vec'][i] = n_cl_val
         
         sp_res = run_single_point(
             p_dict['Waveguide Width'], p_dict['Waveguide Height'],
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
             lam_curr, res_mode, core_material, pol_choice,
-            search_higher_modes=False
+            search_higher_modes=False, custom_n_core=custom_nc, custom_n_clad=custom_ncl
         )
         
         if i in sample_indices:
@@ -312,11 +328,14 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             p_dict[param1_name] = val1
             p_dict[param2_name] = val2
             
+            custom_nc = p_dict.get('Custom Core Index', 2.0)
+            custom_ncl = p_dict.get('Custom Clad Index', 1.444)
+            
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
                 p_dict['Wavelength'], res_mode, core_material, pol_choice,
-                search_higher_modes=False
+                search_higher_modes=False, custom_n_core=custom_nc, custom_n_clad=custom_ncl
             )
             
             if (j == 0 and i == 0):
