@@ -1,15 +1,15 @@
 # ==============================================================================
 # File: mode_engine.py
-# Version: v2.2.1 (Advanced Edition - Syntax Fixed)
+# Version: v2.3.0 (Advanced Edition - Metal Heater & Complex Permittivity)
 # Date: August 2026
-# Description: Fixed all string escape sequences and syntax for Python 3.12+.
+# Description: Added Metal Heater support (Al, Au, Pt) with complex refractive index & metal absorption loss calculation.
 # ==============================================================================
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-# --- REFRACTIVE INDEX DISPERSION MODELS ---
+# --- REFRACTIVE INDEX DISPERSION & METAL MODELS ---
 
 def sellmeier_sio2(lam_um):
     """Cladding: Thermal SiO2 Sellmeier Model"""
@@ -49,23 +49,32 @@ def get_core_index(lam_um, material_name):
     elif material_name == "Si (Silicon)": return n_silicon(lam_um)
     else: return n_sin_stoch(lam_um)
 
-# --- TRAPEZOIDAL, RIB & BENDED MESH GENERATION ---
+def get_metal_complex_index(metal_type, lam_um=1.55):
+    """Returns complex refractive index n + i*k for metals at NIR/1.55um"""
+    if "Al" in metal_type:
+        n_m, k_m = 1.44, 16.00
+    elif "Au" in metal_type:
+        n_m, k_m = 0.55, 11.50
+    elif "Pt" in metal_type:
+        n_m, k_m = 4.00, 7.00
+    else:
+        n_m, k_m = 1.44, 16.00
+    return complex(n_m, k_m)
+
+# --- TRAPEZOIDAL, RIB, BENDED & METAL MESH GENERATION ---
 
 def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, n_core, n_clad, 
                         sidewall_angle_deg=90.0, ring_radius_um=0.0,
-                        wg_type="Strip", h_slab=0.0, w_slab=0.0):
+                        wg_type="Strip", h_slab=0.0, w_slab=0.0,
+                        include_metal=False, metal_type="Al (Aluminum)", metal_thick_um=0.10, metal_width_um=2.0, metal_offset_um=0.0):
     
     angle_rad = np.radians(np.clip(sidewall_angle_deg, 1.0, 90.0))
     w_bottom = w_core + (2.0 * h_core / np.tan(angle_rad)) if sidewall_angle_deg < 89.9 else w_core
     
-    if wg_type == "Rib":
-        max_w = max(w_core, w_bottom, w_slab)
-        total_height = bottom_ox + h_slab + h_core + top_ox + 1.5
-    else:
-        max_w = max(w_core, w_bottom)
-        total_height = bottom_ox + h_core + top_ox + 1.5
-        
+    max_w = max(w_core, w_bottom, w_slab if wg_type=="Rib" else 0.0, abs(metal_offset_um) + metal_width_um/2.0 if include_metal else 0.0)
+    
     total_width = max_w + 2 * side_margin
+    total_height = bottom_ox + (h_slab if wg_type=="Rib" else 0.0) + h_core + top_ox + (metal_thick_um if include_metal else 0.0) + 1.5
     
     nx = int(np.round(total_width / dx)) + 1
     ny = int(np.round(total_height / dy)) + 1
@@ -76,7 +85,9 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     xc = 0.5 * (x[:-1] + x[1:])
     yc = 0.5 * (y[:-1] + y[1:])
     
-    eps = np.full((len(xc), len(yc)), n_clad**2)
+    dtype_mesh = np.complex128 if include_metal else np.float64
+    eps = np.full((len(xc), len(yc)), n_clad**2, dtype=dtype_mesh)
+    
     XC, YC = np.meshgrid(xc, yc, indexing='ij')
     
     if wg_type == "Rib":
@@ -114,7 +125,21 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
         eps[core_mask] = n_core**2
         interface_y = bottom_ox + h_core + top_ox
 
-    air_mask_1d = yc > interface_y
+    # 3. Add Metal Heater Element if enabled
+    metal_mask = np.zeros_like(core_mask, dtype=bool)
+    if include_metal:
+        n_complex_metal = get_metal_complex_index(metal_type)
+        eps_metal = n_complex_metal**2
+        
+        y_metal_min = interface_y
+        y_metal_max = interface_y + metal_thick_um
+        x_metal_min = metal_offset_um - (metal_width_um / 2.0)
+        x_metal_max = metal_offset_um + (metal_width_um / 2.0)
+        
+        metal_mask = (YC >= y_metal_min) & (YC <= y_metal_max) & (XC >= x_metal_min) & (XC <= x_metal_max)
+        eps[metal_mask] = eps_metal
+
+    air_mask_1d = yc > (interface_y + (metal_thick_um if include_metal else 0.0))
     eps[:, air_mask_1d] = 1.0**2  # Air n=1
     
     if ring_radius_um > 0.1:
@@ -124,7 +149,7 @@ def build_advanced_mesh(w_core, h_core, bottom_ox, top_ox, side_margin, dx, dy, 
     air_mask = np.repeat(air_mask_1d[None, :], len(xc), axis=0)
     x_min, x_max = -w_bottom / 2.0, w_bottom / 2.0
     
-    return xc, yc, eps, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom
+    return xc, yc, eps, core_mask, air_mask, metal_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom
 
 # --- 2D SVFD EIGENMODE SOLVER ---
 
@@ -175,15 +200,14 @@ def svmodes_2d(lam_um, guess, nmodes, dx, dy, eps_mesh, polarization='ex'):
     
     vals, vecs = spla.eigs(A, k=nmodes, sigma=shift, which='LM')
     
-    neff_vals = (lam_um / (2.0 * np.pi)) * np.sqrt(np.real(vals))
-    sorted_indices = np.argsort(neff_vals)[::-1]
+    neff_vals = (lam_um / (2.0 * np.pi)) * np.sqrt(vals)
+    sorted_indices = np.argsort(np.real(neff_vals))[::-1]
     neff_vals = neff_vals[sorted_indices]
     
-    phi_modes = np.zeros((nx, ny, nmodes))
+    phi_modes = np.zeros((nx, ny, nmodes), dtype=np.complex128 if np.iscomplexobj(eps_mesh) else np.float64)
     for idx in range(nmodes):
         s_idx = sorted_indices[idx]
-        mode_2d = np.real(vecs[:, s_idx]).reshape((nx, ny), order='F')
-        if np.sum(mode_2d) < 0: mode_2d = -mode_2d
+        mode_2d = vecs[:, s_idx].reshape((nx, ny), order='F')
         max_abs = np.max(np.abs(mode_2d))
         if max_abs > 0: mode_2d /= max_abs
         phi_modes[:, :, idx] = mode_2d
@@ -193,23 +217,25 @@ def svmodes_2d(lam_um, guess, nmodes, dx, dy, eps_mesh, polarization='ex'):
 # --- HELPER: BENDING LOSS & CONVERGENCE SOLVER ---
 
 def calc_bending_loss_methods(neff, n_clad, lam_um, ring_radius_um, xc, yc, field_2d, dx, dy):
+    neff_real = np.real(neff)
     if ring_radius_um <= 0.1:
         return {'loss_m1': 0.0, 'loss_m3': 0.0, 'r_min_um': 0.0, 'x_rad_um': 0.0, 'converged': True}
 
     k0 = 2.0 * np.pi / lam_um
-    delta_n2 = max(neff**2 - n_clad**2, 1e-4)
+    delta_n2 = max(neff_real**2 - n_clad**2, 1e-4)
 
     r_min_um = (3.0 * lam_um) / (4.0 * np.pi * (delta_n2**1.5))
-    arg_m3 = (2.0 / 3.0) * k0 * ring_radius_um * (delta_n2**1.5) / (neff**2)
+    arg_m3 = (2.0 / 3.0) * k0 * ring_radius_um * (delta_n2**1.5) / (neff_real**2)
     loss_m3 = 500.0 * (lam_um / ring_radius_um) * np.exp(-arg_m3)
 
-    x_rad = ring_radius_um * ((neff / n_clad) - 1.0) if neff > n_clad else 0.0
+    x_rad = ring_radius_um * ((neff_real / n_clad) - 1.0) if neff_real > n_clad else 0.0
     
     XC, _ = np.meshgrid(xc, yc, indexing='ij')
     caustic_mask = XC >= x_rad
     
-    p_tot = np.sum(field_2d**2) * dx * dy
-    p_caustic = np.sum(field_2d[caustic_mask]**2) * dx * dy if p_tot > 0 else 0.0
+    f_abs2 = np.abs(field_2d)**2
+    p_tot = np.sum(f_abs2) * dx * dy
+    p_caustic = np.sum(f_abs2[caustic_mask]) * dx * dy if p_tot > 0 else 0.0
     tail_fraction = p_caustic / p_tot if p_tot > 0 else 0.0
     
     gamma = k0 * np.sqrt(delta_n2)
@@ -227,28 +253,36 @@ def calc_bending_loss_methods(neff, n_clad, lam_um, ring_radius_um, xc, yc, fiel
     }
 
 def calc_fwhm(vec, profile):
-    half_max = np.max(profile) / 2.0
-    above = np.where(profile >= half_max)[0]
+    p_real = np.abs(profile)
+    half_max = np.max(p_real) / 2.0
+    above = np.where(p_real >= half_max)[0]
     if len(above) >= 2:
         return float(vec[above[-1]] - vec[above[0]])
     return 0.0
 
 # --- SINGLE POINT SOLVER ---
 
-def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", search_higher_modes=False, sidewall_angle_deg=90.0, ring_radius_um=0.0, wg_type="Strip", h_slab=0.0, w_slab=0.0):
+def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice="Both (TE & TM)", 
+                     search_higher_modes=False, sidewall_angle_deg=90.0, ring_radius_um=0.0, 
+                     wg_type="Strip", h_slab=0.0, w_slab=0.0,
+                     include_metal=False, metal_type="Al (Aluminum)", metal_thick_um=0.10, metal_width_um=2.0, metal_offset_um=0.0):
+    
     dx = dy = 0.005 if "hr" in res_mode else (0.01 if "mr" in res_mode else 0.02)
     n_core = get_core_index(lam_um, core_material)
     n_clad = sellmeier_sio2(lam_um)
     
-    xc, yc, eps_mesh, core_mask, air_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom = build_advanced_mesh(
-        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg, ring_radius_um, wg_type, h_slab, w_slab
+    xc, yc, eps_mesh, core_mask, air_mask, metal_mask, interface_y, x_min, x_max, y_min, y_max, w_bottom = build_advanced_mesh(
+        w_core, h_core, bottom_ox, top_ox, 2.0, dx, dy, n_core, n_clad, sidewall_angle_deg, ring_radius_um, 
+        wg_type, h_slab, w_slab, include_metal, metal_type, metal_thick_um, metal_width_um, metal_offset_um
     )
     
     res = {
-        'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh, 'core_mask': core_mask,
+        'xc': xc, 'yc': yc, 'eps_mesh': eps_mesh, 'core_mask': core_mask, 'metal_mask': metal_mask,
         'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max,
         'w_top': w_core, 'w_bottom': w_bottom, 'sidewall_angle_deg': sidewall_angle_deg,
         'ring_radius_um': ring_radius_um, 'wg_type': wg_type, 'h_slab': h_slab, 'w_slab': w_slab,
+        'include_metal': include_metal, 'metal_type': metal_type, 'metal_thick_um': metal_thick_um,
+        'metal_width_um': metal_width_um, 'metal_offset_um': metal_offset_um,
         'interface_y': interface_y, 'lam_um': lam_um, 'pol_choice': pol_choice,
         'te_modes': [], 'tm_modes': []
     }
@@ -263,26 +297,33 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
         phi_te, neff_te = svmodes_2d(lam_um, guess_te, max_search_modes, dx, dy, eps_mesh, 'ex')
         for idx in range(max_search_modes):
             n_val = neff_te[idx]
+            n_real = np.real(n_val)
+            n_imag = np.imag(n_val)
             p_m = phi_te[:, :, idx]
-            tot_p = np.sum(p_m**2)
-            g_core = (np.sum(p_m[core_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
-            g_air = (np.sum(p_m[air_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
-            a_eff = ((tot_p * dx * dy)**2) / (np.sum(p_m**4) * dx * dy) if np.sum(p_m**4) > 0 else 0.0
             
-            fwhm_x = calc_fwhm(xc, p_m[:, mid_y_idx]**2)
-            fwhm_y = calc_fwhm(yc, p_m[mid_x_idx, :]**2)
+            p_abs2 = np.abs(p_m)**2
+            tot_p = np.sum(p_abs2)
+            g_core = (np.sum(p_abs2[core_mask]) / tot_p) * 100.0 if tot_p > 0 else 0.0
+            g_air = (np.sum(p_abs2[air_mask]) / tot_p) * 100.0 if tot_p > 0 else 0.0
+            a_eff = ((tot_p * dx * dy)**2) / (np.sum(p_abs2**2) * dx * dy) if np.sum(p_abs2**2) > 0 else 0.0
             
-            bend_info = calc_bending_loss_methods(n_val, n_clad, lam_um, ring_radius_um, xc, yc, p_m, dx, dy)
+            fwhm_x = calc_fwhm(xc, p_abs2[:, mid_y_idx])
+            fwhm_y = calc_fwhm(yc, p_abs2[mid_x_idx, :])
             
-            if n_val > (n_clad + 0.001) and g_core > 5.0:
+            metal_loss_db_cm = 4.343 * (4.0 * np.pi / (lam_um * 1e-4)) * abs(n_imag) if include_metal else 0.0
+            bend_info = calc_bending_loss_methods(n_val, n_clad, lam_um, ring_radius_um, xc, yc, p_abs2, dx, dy)
+            
+            if n_real > (n_clad + 0.001) and g_core > 5.0:
                 res['te_modes'].append({
                     'mode_num': len(res['te_modes']),
-                    'neff': n_val, 'field': p_m,
+                    'neff': n_real, 'neff_complex': n_val,
+                    'metal_loss_db_cm': metal_loss_db_cm,
+                    'field': p_abs2, 'field_complex': p_m,
                     'gamma_core': g_core, 'gamma_air': g_air,
                     'a_eff': a_eff, 'mfd': 2.0 * np.sqrt(a_eff / np.pi) if a_eff > 0 else 0.0,
                     'fwhm_x': fwhm_x, 'fwhm_y': fwhm_y,
                     'bend_info': bend_info,
-                    'cut_x': p_m[:, mid_y_idx], 'cut_y': p_m[mid_x_idx, :]
+                    'cut_x': p_abs2[:, mid_y_idx], 'cut_y': p_abs2[mid_x_idx, :]
                 })
                 
     if pol_choice in ["TM", "Both (TE & TM)"]:
@@ -290,26 +331,33 @@ def run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_m
         phi_tm, neff_tm = svmodes_2d(lam_um, guess_tm, max_search_modes, dx, dy, eps_mesh, 'ey')
         for idx in range(max_search_modes):
             n_val = neff_tm[idx]
+            n_real = np.real(n_val)
+            n_imag = np.imag(n_val)
             p_m = phi_tm[:, :, idx]
-            tot_p = np.sum(p_m**2)
-            g_core = (np.sum(p_m[core_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
-            g_air = (np.sum(p_m[air_mask]**2) / tot_p) * 100.0 if tot_p > 0 else 0.0
-            a_eff = ((tot_p * dx * dy)**2) / (np.sum(p_m**4) * dx * dy) if np.sum(p_m**4) > 0 else 0.0
             
-            fwhm_x = calc_fwhm(xc, p_m[:, mid_y_idx]**2)
-            fwhm_y = calc_fwhm(yc, p_m[mid_x_idx, :]**2)
+            p_abs2 = np.abs(p_m)**2
+            tot_p = np.sum(p_abs2)
+            g_core = (np.sum(p_abs2[core_mask]) / tot_p) * 100.0 if tot_p > 0 else 0.0
+            g_air = (np.sum(p_abs2[air_mask]) / tot_p) * 100.0 if tot_p > 0 else 0.0
+            a_eff = ((tot_p * dx * dy)**2) / (np.sum(p_abs2**2) * dx * dy) if np.sum(p_abs2**2) > 0 else 0.0
             
-            bend_info = calc_bending_loss_methods(n_val, n_clad, lam_um, ring_radius_um, xc, yc, p_m, dx, dy)
+            fwhm_x = calc_fwhm(xc, p_abs2[:, mid_y_idx])
+            fwhm_y = calc_fwhm(yc, p_abs2[mid_x_idx, :])
             
-            if n_val > (n_clad + 0.001) and g_core > 5.0:
+            metal_loss_db_cm = 4.343 * (4.0 * np.pi / (lam_um * 1e-4)) * abs(n_imag) if include_metal else 0.0
+            bend_info = calc_bending_loss_methods(n_val, n_clad, lam_um, ring_radius_um, xc, yc, p_abs2, dx, dy)
+            
+            if n_real > (n_clad + 0.001) and g_core > 5.0:
                 res['tm_modes'].append({
                     'mode_num': len(res['tm_modes']),
-                    'neff': n_val, 'field': p_m,
+                    'neff': n_real, 'neff_complex': n_val,
+                    'metal_loss_db_cm': metal_loss_db_cm,
+                    'field': p_abs2, 'field_complex': p_m,
                     'gamma_core': g_core, 'gamma_air': g_air,
                     'a_eff': a_eff, 'mfd': 2.0 * np.sqrt(a_eff / np.pi) if a_eff > 0 else 0.0,
                     'fwhm_x': fwhm_x, 'fwhm_y': fwhm_y,
                     'bend_info': bend_info,
-                    'cut_x': p_m[:, mid_y_idx], 'cut_y': p_m[mid_x_idx, :]
+                    'cut_x': p_abs2[:, mid_y_idx], 'cut_y': p_abs2[mid_x_idx, :]
                 })
                 
     return res
@@ -323,6 +371,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         'param_name': param_name, 'param_vec': param_vec, 'pol_choice': pol_choice,
         'sample_points': {},
         'neff_te': np.full(n_pts, np.nan), 'neff_tm': np.full(n_pts, np.nan),
+        'metal_loss_te': np.full(n_pts, np.nan), 'metal_loss_tm': np.full(n_pts, np.nan),
         'loss_m1_te': np.full(n_pts, np.nan), 'loss_m3_te': np.full(n_pts, np.nan),
         'loss_m1_tm': np.full(n_pts, np.nan), 'loss_m3_tm': np.full(n_pts, np.nan),
         'r_min_te': np.full(n_pts, np.nan), 'r_min_tm': np.full(n_pts, np.nan),
@@ -345,6 +394,11 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         wg_type = p_dict.get('Profile Type', 'Strip')
         h_slab = p_dict.get('Slab Height', 0.0)
         w_slab = p_dict.get('Slab Width', 0.0)
+        inc_metal = p_dict.get('Include Metal Heater', False)
+        m_type = p_dict.get('Metal Type', 'Al (Aluminum)')
+        m_thick = p_dict.get('Metal Thickness', 0.10)
+        m_width = p_dict.get('Metal Width', 2.0)
+        m_offset = p_dict.get('Metal Offset', 0.0)
         
         res['n_core_vec'][i] = get_core_index(lam_curr, core_material)
         res['n_clad_vec'][i] = sellmeier_sio2(lam_curr)
@@ -354,7 +408,8 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
             p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
             lam_curr, res_mode, core_material, pol_choice,
             search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius,
-            wg_type=wg_type, h_slab=h_slab, w_slab=w_slab
+            wg_type=wg_type, h_slab=h_slab, w_slab=w_slab,
+            include_metal=inc_metal, metal_type=m_type, metal_thick_um=m_thick, metal_width_um=m_width, metal_offset_um=m_offset
         )
         
         if i in sample_indices:
@@ -364,6 +419,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         if len(sp_res['te_modes']) > 0:
             m0 = sp_res['te_modes'][0]
             res['neff_te'][i] = m0['neff']
+            res['metal_loss_te'][i] = m0['metal_loss_db_cm']
             res['gamma_core_te'][i] = m0['gamma_core']
             res['gamma_air_te'][i] = m0['gamma_air']
             res['a_eff_te'][i] = m0['a_eff']
@@ -374,6 +430,7 @@ def run_1d_sweep(param_name, param_vec, fixed_params, res_mode, core_material, p
         if len(sp_res['tm_modes']) > 0:
             m0 = sp_res['tm_modes'][0]
             res['neff_tm'][i] = m0['neff']
+            res['metal_loss_tm'][i] = m0['metal_loss_db_cm']
             res['gamma_core_tm'][i] = m0['gamma_core']
             res['gamma_air_tm'][i] = m0['gamma_air']
             res['a_eff_tm'][i] = m0['a_eff']
@@ -431,13 +488,19 @@ def run_2d_universal_sweep(param1_name, vec1, param2_name, vec2, fixed_params, r
             wg_type = p_dict.get('Profile Type', 'Strip')
             h_slab = p_dict.get('Slab Height', 0.0)
             w_slab = p_dict.get('Slab Width', 0.0)
+            inc_metal = p_dict.get('Include Metal Heater', False)
+            m_type = p_dict.get('Metal Type', 'Al (Aluminum)')
+            m_thick = p_dict.get('Metal Thickness', 0.10)
+            m_width = p_dict.get('Metal Width', 2.0)
+            m_offset = p_dict.get('Metal Offset', 0.0)
             
             sp_res = run_single_point(
                 p_dict['Waveguide Width'], p_dict['Waveguide Height'],
                 p_dict['Oxide Bottom Thickness'], p_dict['Oxide Top Thickness'],
                 p_dict['Wavelength'], res_mode, core_material, pol_choice,
                 search_higher_modes=False, sidewall_angle_deg=sidewall_angle, ring_radius_um=ring_radius,
-                wg_type=wg_type, h_slab=h_slab, w_slab=w_slab
+                wg_type=wg_type, h_slab=h_slab, w_slab=w_slab,
+                include_metal=inc_metal, metal_type=m_type, metal_thick_um=m_thick, metal_width_um=m_width, metal_offset_um=m_offset
             )
             
             if (j == 0 and i == 0):
