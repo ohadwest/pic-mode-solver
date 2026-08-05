@@ -41,7 +41,7 @@ def inject_google_analytics(measurement_id):
 inject_google_analytics("G-7776KX662W")
 
 st.title("⚡ Universal Waveguide Core & Air Confinement Solver")
-st.markdown("### Integrated Optics Multi-Mode Solver with Trapezoidal Sidewalls & PDF Export")
+st.markdown("### Integrated Optics Multi-Mode Solver with Individual Image Exports & PDF Reports")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
@@ -83,18 +83,6 @@ def display_fig_with_download(fig, filename, key_unique):
         mime="image/png",
         key=key_unique
     )
-
-# --- HELPER FUNCTION: DRAW TRAPEZOID OUTLINE ON MATPLOTLIB AXIS ---
-def draw_core_outline(ax, sp_r):
-    w_top = sp_r.get('w_top', 1.5)
-    w_bot = sp_r.get('w_bottom', w_top)
-    y_min, y_max = sp_r['y_min'], sp_r['y_max']
-    
-    # Polygon corners: Bottom-Left, Bottom-Right, Top-Right, Top-Left, Bottom-Left
-    x_coords = [-w_bot / 2.0, w_bot / 2.0, w_top / 2.0, -w_top / 2.0, -w_bot / 2.0]
-    y_coords = [y_min, y_min, y_max, y_max, y_min]
-    
-    ax.plot(x_coords, y_coords, 'w--', lw=1.5, label='Core Boundary')
 
 # --- HELPER FUNCTION: GENERATE PDF REPORT ---
 def create_pdf_report(title, summary_dict, figs_dict):
@@ -154,19 +142,21 @@ def create_pdf_report(title, summary_dict, figs_dict):
 def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
     tags = ["Min", "Mid", "Max"]
     
+    # 1. First show Index Profile of Mid point
     if "Mid" in sample_points_dict:
         mid_sp = sample_points_dict["Mid"]["res"]
         st.markdown("#### 📐 Cross-Sectional Refractive Index Distribution $n(x,y)$")
         fig_n, ax_n = plt.subplots(figsize=(7, 3.8))
         n_mesh = np.sqrt(mid_sp['eps_mesh'])
         im_n = ax_n.imshow(n_mesh.T, origin='lower', extent=[mid_sp['xc'][0], mid_sp['xc'][-1], mid_sp['yc'][0], mid_sp['yc'][-1]], cmap='viridis', aspect='auto')
-        draw_core_outline(ax_n, mid_sp)
+        ax_n.plot([mid_sp['x_min'], mid_sp['x_max'], mid_sp['x_max'], mid_sp['x_min'], mid_sp['x_min']], [mid_sp['y_min'], mid_sp['y_min'], mid_sp['y_max'], mid_sp['y_max'], mid_sp['y_min']], 'w--', lw=1.5)
         fig_n.colorbar(im_n, ax=ax_n, label='Refractive Index (n)')
         ax_n.set_xlabel('Horizontal Position X [μm]')
         ax_n.set_ylabel('Vertical Position Y [μm]')
         display_fig_with_download(fig_n, "refractive_index_profile.png", f"{prefix_key}_n_prof")
         st.markdown("---")
 
+    # 2. Show 3 Sample Fields Side-by-Side
     st.markdown("#### 🖼️ Representative Mode Profiles Across Scan Range (Min / Mid / Max)")
     col_a, col_b, col_c = st.columns(3)
     cols = [col_a, col_b, col_c]
@@ -187,7 +177,7 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
                     m0 = sp_r['te_modes'][0]
                     fig, ax = plt.subplots(figsize=(5, 3.5))
                     im = ax.imshow(m0['field'].T, origin='lower', extent=[sp_r['xc'][0], sp_r['xc'][-1], sp_r['yc'][0], sp_r['yc'][-1]], cmap='jet', aspect='auto')
-                    draw_core_outline(ax, sp_r)
+                    ax.plot([sp_r['x_min'], sp_r['x_max'], sp_r['x_max'], sp_r['x_min'], sp_r['x_min']], [sp_r['y_min'], sp_r['y_min'], sp_r['y_max'], sp_r['y_max'], sp_r['y_min']], 'w--', lw=1.2)
                     ax.axhline(sp_r['interface_y'], color='r', linestyle='--', lw=1.2, label='Air Boundary')
                     fig.colorbar(im, ax=ax)
                     ax.set_title(f"TE0 Field (n_eff={m0['neff']:.4f})")
@@ -197,7 +187,7 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
                     m0 = sp_r['tm_modes'][0]
                     fig, ax = plt.subplots(figsize=(5, 3.5))
                     im = ax.imshow(m0['field'].T, origin='lower', extent=[sp_r['xc'][0], sp_r['xc'][-1], sp_r['yc'][0], sp_r['yc'][-1]], cmap='jet', aspect='auto')
-                    draw_core_outline(ax, sp_r)
+                    ax.plot([sp_r['x_min'], sp_r['x_max'], sp_r['x_max'], sp_r['x_min'], sp_r['x_min']], [sp_r['y_min'], sp_r['y_min'], sp_r['y_max'], sp_r['y_max'], sp_r['y_min']], 'w--', lw=1.2)
                     ax.axhline(sp_r['interface_y'], color='r', linestyle='--', lw=1.2, label='Air Boundary')
                     fig.colorbar(im, ax=ax)
                     ax.set_title(f"TM0 Field (n_eff={m0['neff']:.4f})")
@@ -208,9 +198,8 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
 # ==============================================================================
 if analysis_type == "Single Point Analysis":
     st.sidebar.header("🛠️ Geometry & Wavelength")
-    w_core = st.sidebar.number_input("Waveguide Top Width [μm]", value=1.5, step=0.1)
+    w_core = st.sidebar.number_input("Waveguide Width [μm]", value=1.5, step=0.1)
     h_core = st.sidebar.number_input("Waveguide Height [μm]", value=0.4, step=0.05)
-    sidewall_angle = st.sidebar.slider("Sidewall Angle [deg]", min_value=30.0, max_value=90.0, value=90.0, step=1.0, help="90° = Rectangular. 45-80° = Trapezoidal sidewall etch.")
     lam_um = st.sidebar.number_input("Wavelength [μm]", value=1.55, step=0.01)
     top_ox = st.sidebar.number_input("Oxide Top Thickness [μm]", value=0.1, step=0.05)
     bottom_ox = st.sidebar.number_input("Oxide Bottom Thickness (BOX) [μm]", value=4.0, step=0.5)
@@ -223,7 +212,7 @@ if analysis_type == "Single Point Analysis":
     if run_sp_btn or 'sp_results' in st.session_state:
         if run_sp_btn:
             with st.spinner("Solving optical wave equations..."):
-                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes, sidewall_angle)
+                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes)
                 st.session_state['sp_results'] = res
 
         r = st.session_state['sp_results']
@@ -233,9 +222,6 @@ if analysis_type == "Single Point Analysis":
         m2.metric("Bound TM Modes Found", f"{len(r['tm_modes'])}")
         if len(r['te_modes']) > 0: m3.metric("TE0 n_eff", f"{r['te_modes'][0]['neff']:.4f}")
         if len(r['tm_modes']) > 0: m4.metric("TM0 n_eff", f"{r['tm_modes'][0]['neff']:.4f}")
-
-        if r.get('sidewall_angle_deg', 90.0) < 89.9:
-            st.info(f"📐 **Trapezoidal Profile Active:** Top Width = `{r['w_top']:.3f} μm`, Bottom Width = `{r['w_bottom']:.3f} μm` (Angle = `{r['sidewall_angle_deg']:.1f}°`)")
 
         st.markdown("---")
         
@@ -258,7 +244,7 @@ if analysis_type == "Single Point Analysis":
             fig_idx_prof, ax_idx_prof = plt.subplots(figsize=(7, 4))
             n_mesh = np.sqrt(r['eps_mesh'])
             im_n = ax_idx_prof.imshow(n_mesh.T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='viridis', aspect='auto')
-            draw_core_outline(ax_idx_prof, r)
+            ax_idx_prof.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
             fig_idx_prof.colorbar(im_n, ax=ax_idx_prof, label='Refractive Index (n)')
             ax_idx_prof.set_xlabel('Horizontal Position X [μm]')
             ax_idx_prof.set_ylabel('Vertical Position Y [μm]')
@@ -284,7 +270,7 @@ if analysis_type == "Single Point Analysis":
                 with col_img:
                     fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
                     im_m = ax_m.imshow(m['field'].T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='jet', aspect='auto')
-                    draw_core_outline(ax_m, r)
+                    ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
                     ax_m.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
                     fig_m.colorbar(im_m, ax=ax_m, label='Field (Ex)')
                     display_fig_with_download(fig_m, f"TE{m['mode_num']}_field_profile.png", f"sp_te_{m['mode_num']}")
@@ -309,7 +295,7 @@ if analysis_type == "Single Point Analysis":
                 with col_img:
                     fig_m, ax_m = plt.subplots(figsize=(6, 3.5))
                     im_m = ax_m.imshow(m['field'].T, origin='lower', extent=[r['xc'][0], r['xc'][-1], r['yc'][0], r['yc'][-1]], cmap='jet', aspect='auto')
-                    draw_core_outline(ax_m, r)
+                    ax_m.plot([r['x_min'], r['x_max'], r['x_max'], r['x_min'], r['x_min']], [r['y_min'], r['y_min'], r['y_max'], r['y_max'], r['y_min']], 'w--', lw=1.5)
                     ax_m.axhline(r['interface_y'], color='r', linestyle='--', lw=1.5, label='Air Boundary')
                     fig_m.colorbar(im_m, ax=ax_m, label='Field (Ey)')
                     display_fig_with_download(fig_m, f"TM{m['mode_num']}_field_profile.png", f"sp_tm_{m['mode_num']}")
@@ -359,9 +345,7 @@ if analysis_type == "Single Point Analysis":
         summary_info = {
             "Core Material": core_material,
             "Wavelength [μm]": lam_um,
-            "Top Width [μm]": w_core,
-            "Bottom Width [μm]": f"{r['w_bottom']:.3f}",
-            "Sidewall Angle": f"{sidewall_angle}°",
+            "Core Width [μm]": w_core,
             "Core Height [μm]": h_core,
             "Top Oxide [μm]": top_ox,
             "BOX Thickness [μm]": bottom_ox,
@@ -400,23 +384,23 @@ if analysis_type == "Single Point Analysis":
 # ==============================================================================
 elif analysis_type == "1D Parametric Sweep":
     st.sidebar.header("🎯 1D Scan Parameter Controls")
-    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Sidewall Angle", "Oxide Top Thickness"]
+    param_options = ["Wavelength", "Waveguide Width", "Waveguide Height", "Oxide Top Thickness"]
     axis_1d = st.sidebar.selectbox("Scanned Parameter", options=param_options, index=0)
 
-    def_min = 1.50 if axis_1d == "Wavelength" else (60.0 if axis_1d == "Sidewall Angle" else (0.6 if axis_1d == "Waveguide Width" else 0.2))
-    def_max = 1.60 if axis_1d == "Wavelength" else (90.0 if axis_1d == "Sidewall Angle" else (1.8 if axis_1d == "Waveguide Width" else 0.6))
+    def_min = 1.50 if axis_1d == "Wavelength" else (0.6 if axis_1d == "Waveguide Width" else 0.2)
+    def_max = 1.60 if axis_1d == "Wavelength" else (1.8 if axis_1d == "Waveguide Width" else 0.6)
     def_pts = 11
 
     c_min, c_max, c_pts = st.sidebar.columns(3)
-    val_min = c_min.number_input("Min", value=def_min, step=0.05 if axis_1d!="Sidewall Angle" else 5.0)
-    val_max = c_max.number_input("Max", value=def_max, step=0.05 if axis_1d!="Sidewall Angle" else 5.0)
+    val_min = c_min.number_input("Min", value=def_min, step=0.05)
+    val_max = c_max.number_input("Max", value=def_max, step=0.05)
     num_pts = c_pts.number_input("Points", value=def_pts, min_value=3, max_value=51, step=2)
 
     rem_params_1d = [p for p in param_options if p != axis_1d]
     fixed_dict_1d = {}
     st.sidebar.markdown("**Fixed Parameters:**")
     for p in rem_params_1d:
-        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1)))
+        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (1.55 if p=="Wavelength" else 0.1))
         fixed_dict_1d[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
     fixed_dict_1d["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
@@ -451,6 +435,7 @@ elif analysis_type == "1D Parametric Sweep":
             "📐 Effective Area (A_eff)"
         ])
 
+        # TAB 1: Index Profile & 3 Sample Fields
         with tab1:
             render_index_and_3_sample_fields(s1['sample_points'], prefix_key="1d_tab1")
 
@@ -558,27 +543,27 @@ elif analysis_type == "1D Parametric Sweep":
 # ==============================================================================
 else:
     st.sidebar.header("🎯 2D Scan Axes Controls")
-    param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Sidewall Angle", "Oxide Top Thickness"]
+    param_options = ["Waveguide Width", "Waveguide Height", "Wavelength", "Oxide Top Thickness"]
     axis_x = st.sidebar.selectbox("First Scan Axis (X)", options=param_options, index=2)
     axis_y = st.sidebar.selectbox("Second Scan Axis (Y)", options=[p for p in param_options if p != axis_x], index=0)
 
     st.sidebar.markdown(f"**Axis X ({axis_x}) Range:**")
     cx_min, cx_max, cx_pts = st.sidebar.columns(3)
-    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else (60.0 if axis_x=="Sidewall Angle" else 0.6), key="vx_min")
-    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else (90.0 if axis_x=="Sidewall Angle" else 1.8), key="vx_max")
+    vx_min = cx_min.number_input("Min X", value=1.50 if axis_x=="Wavelength" else 0.6, key="vx_min")
+    vx_max = cx_max.number_input("Max X", value=1.60 if axis_x=="Wavelength" else 1.8, key="vx_max")
     nx_pts = cx_pts.number_input("Pts X", value=7, min_value=3, max_value=21, key="nx_pts")
 
     st.sidebar.markdown(f"**Axis Y ({axis_y}) Range:**")
     cy_min, cy_max, cy_pts = st.sidebar.columns(3)
-    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else (60.0 if axis_y=="Sidewall Angle" else 0.6), key="vy_min")
-    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else (90.0 if axis_y=="Sidewall Angle" else 1.8), key="vy_max")
+    vy_min = cy_min.number_input("Min Y", value=0.2 if axis_y=="Waveguide Height" else 0.6, key="vy_min")
+    vy_max = cy_max.number_input("Max Y", value=0.6 if axis_y=="Waveguide Height" else 1.8, key="vy_max")
     ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
 
     remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
     fixed_dict = {}
     st.sidebar.markdown("**Fixed Parameters:**")
     for p in remaining_params:
-        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (90.0 if p=="Sidewall Angle" else (1.55 if p=="Wavelength" else 0.1)))
+        def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (1.55 if p=="Wavelength" else 0.1))
         fixed_dict[p] = st.sidebar.number_input(f"{p} (Fixed)", value=def_val)
     fixed_dict["Oxide Bottom Thickness"] = st.sidebar.number_input("BOX Thickness [μm]", value=4.0)
 
@@ -611,6 +596,7 @@ else:
             "🗺️ Air Cladding Confinement Maps (Γ_Air)"
         ])
 
+        # TAB 1: Index Profile & 3 Sample Fields
         with tab2d_1:
             render_index_and_3_sample_fields(sr['sample_points'], prefix_key="2d_tab1")
 
