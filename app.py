@@ -1,3 +1,10 @@
+# ==============================================================================
+# File: app.py
+# Version: v1.2.0 (Standard Rectangular Edition + Custom Material Support)
+# Date: August 2026
+# Description: Added Custom User Defined material option with manual n_core & n_clad inputs.
+# ==============================================================================
+
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
@@ -41,15 +48,23 @@ def inject_google_analytics(measurement_id):
 inject_google_analytics("G-7776KX662W")
 
 st.title("⚡ Universal Waveguide Core & Air Confinement Solver")
-st.markdown("### Integrated Optics Multi-Mode Solver with Individual Image Exports & PDF Reports")
+st.markdown("### Integrated Optics Multi-Mode Solver with Custom Material & PDF Export Tools")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🧪 Material & Polarization")
 core_material = st.sidebar.selectbox(
     "Core Material",
-    options=["Si3N4 (Stoichiometric)", "SiN (Low Stress)", "Al2O3 (Alumina)", "Si (Silicon)"],
+    options=["Si3N4 (Stoichiometric)", "SiN (Low Stress)", "Al2O3 (Alumina)", "Si (Silicon)", "Custom (User Defined)"],
     index=0
 )
+
+# Custom Material Inputs
+custom_n_core = 2.00
+custom_n_clad = 1.444
+if core_material == "Custom (User Defined)":
+    st.sidebar.markdown("**⚙️ Custom Material Parameters (Constant Index):**")
+    custom_n_core = st.sidebar.number_input("Core Refractive Index (n_core)", value=2.000, step=0.01, format="%.4f")
+    custom_n_clad = st.sidebar.number_input("Cladding Refractive Index (n_clad)", value=1.444, step=0.01, format="%.4f")
 
 pol_choice = st.sidebar.selectbox(
     "Polarization Selection",
@@ -142,7 +157,6 @@ def create_pdf_report(title, summary_dict, figs_dict):
 def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
     tags = ["Min", "Mid", "Max"]
     
-    # 1. First show Index Profile of Mid point
     if "Mid" in sample_points_dict:
         mid_sp = sample_points_dict["Mid"]["res"]
         st.markdown("#### 📐 Cross-Sectional Refractive Index Distribution $n(x,y)$")
@@ -156,7 +170,6 @@ def render_index_and_3_sample_fields(sample_points_dict, prefix_key=""):
         display_fig_with_download(fig_n, "refractive_index_profile.png", f"{prefix_key}_n_prof")
         st.markdown("---")
 
-    # 2. Show 3 Sample Fields Side-by-Side
     st.markdown("#### 🖼️ Representative Mode Profiles Across Scan Range (Min / Mid / Max)")
     col_a, col_b, col_c = st.columns(3)
     cols = [col_a, col_b, col_c]
@@ -212,7 +225,7 @@ if analysis_type == "Single Point Analysis":
     if run_sp_btn or 'sp_results' in st.session_state:
         if run_sp_btn:
             with st.spinner("Solving optical wave equations..."):
-                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes)
+                res = run_single_point(w_core, h_core, bottom_ox, top_ox, lam_um, res_mode, core_material, pol_choice, search_higher_modes, custom_n_core, custom_n_clad)
                 st.session_state['sp_results'] = res
 
         r = st.session_state['sp_results']
@@ -344,6 +357,8 @@ if analysis_type == "Single Point Analysis":
         
         summary_info = {
             "Core Material": core_material,
+            "Core Index (n_core)": f"{r['n_core_used']:.4f}",
+            "Clad Index (n_clad)": f"{r['n_clad_used']:.4f}",
             "Wavelength [μm]": lam_um,
             "Core Width [μm]": w_core,
             "Core Height [μm]": h_core,
@@ -397,7 +412,10 @@ elif analysis_type == "1D Parametric Sweep":
     num_pts = c_pts.number_input("Points", value=def_pts, min_value=3, max_value=51, step=2)
 
     rem_params_1d = [p for p in param_options if p != axis_1d]
-    fixed_dict_1d = {}
+    fixed_dict_1d = {
+        'Custom Core Index': custom_n_core,
+        'Custom Clad Index': custom_n_clad
+    }
     st.sidebar.markdown("**Fixed Parameters:**")
     for p in rem_params_1d:
         def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (1.55 if p=="Wavelength" else 0.1))
@@ -435,7 +453,6 @@ elif analysis_type == "1D Parametric Sweep":
             "📐 Effective Area (A_eff)"
         ])
 
-        # TAB 1: Index Profile & 3 Sample Fields
         with tab1:
             render_index_and_3_sample_fields(s1['sample_points'], prefix_key="1d_tab1")
 
@@ -450,11 +467,11 @@ elif analysis_type == "1D Parametric Sweep":
         with tab3:
             fig_mat, ax_mat = plt.subplots(figsize=(7, 4))
             ax_mat.plot(s1['param_vec'], s1['n_core_vec'], 'k--', lw=2, label=f'n_core ({core_material})')
-            ax_mat.plot(s1['param_vec'], s1['n_clad_vec'], 'g--', lw=2, label='n_clad (SiO2)')
+            ax_mat.plot(s1['param_vec'], s1['n_clad_vec'], 'g--', lw=2, label='n_clad')
             if s1['pol_choice'] in ["TE", "Both (TE & TM)"]: ax_mat.plot(s1['param_vec'], s1['neff_te'], 'bo-', lw=2, label='n_eff (TE0)')
             if s1['pol_choice'] in ["TM", "Both (TE & TM)"]: ax_mat.plot(s1['param_vec'], s1['neff_tm'], 'rs-', lw=2, label='n_eff (TM0)')
             ax_mat.grid(True); ax_mat.legend(); ax_mat.set_xlabel(s1['param_name']); ax_mat.set_ylabel('Refractive Index (n)')
-            ax_mat.set_title(f"Modal Dispersion n_eff vs. Material Indices ({core_material} & SiO2)")
+            ax_mat.set_title(f"Modal Dispersion n_eff vs. Material Indices ({core_material})")
             display_fig_with_download(fig_mat, f"1D_material_vs_neff_{axis_1d}.png", "1d_mat_fig")
             figs_for_pdf_1d["Material vs Modal Index Comparison"] = fig_mat
 
@@ -560,7 +577,10 @@ else:
     ny_pts = cy_pts.number_input("Pts Y", value=5, min_value=3, max_value=21, key="ny_pts")
 
     remaining_params = [p for p in param_options if p not in [axis_x, axis_y]]
-    fixed_dict = {}
+    fixed_dict = {
+        'Custom Core Index': custom_n_core,
+        'Custom Clad Index': custom_n_clad
+    }
     st.sidebar.markdown("**Fixed Parameters:**")
     for p in remaining_params:
         def_val = 1.0 if p=="Waveguide Width" else (0.4 if p=="Waveguide Height" else (1.55 if p=="Wavelength" else 0.1))
@@ -596,7 +616,6 @@ else:
             "🗺️ Air Cladding Confinement Maps (Γ_Air)"
         ])
 
-        # TAB 1: Index Profile & 3 Sample Fields
         with tab2d_1:
             render_index_and_3_sample_fields(sr['sample_points'], prefix_key="2d_tab1")
 
